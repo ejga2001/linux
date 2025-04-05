@@ -1892,6 +1892,24 @@ static int vc6_plane_mode_set(struct drm_plane *plane,
 
 	src_x = vc4_state->src_x >> 16;
 
+	/* fetch an extra pixel if we don't actually line up with the left edge. */
+	if ((vc4_state->src_x & 0xffff) && vc4_state->src_x < (state->fb->width << 16))
+		width++;
+
+	/* same for the right side */
+	if (((vc4_state->src_x + vc4_state->src_w[0]) & 0xffff) &&
+	    vc4_state->src_x + vc4_state->src_w[0] < (state->fb->width << 16))
+		width++;
+
+	/* now for the top */
+	if ((vc4_state->src_y & 0xffff) && vc4_state->src_y < (state->fb->height << 16))
+		height++;
+
+	/* and the bottom */
+	if (((vc4_state->src_y + vc4_state->src_h[0]) & 0xffff) &&
+	    vc4_state->src_y + vc4_state->src_h[0] < (state->fb->height << 16))
+		height++;
+
 	switch (base_format_mod) {
 	case DRM_FORMAT_MOD_LINEAR:
 		tiling = SCALER6_CTL0_ADDR_MODE_LINEAR;
@@ -1970,18 +1988,18 @@ static int vc6_plane_mode_set(struct drm_plane *plane,
 
 			if (fb->format->format == DRM_FORMAT_P030) {
 				/*
-				 * Spec says: bits [31:4] of the given address
-				 * should point to the 128-bit word containing
-				 * the desired starting pixel, and bits[3:0]
-				 * should be between 0 and 11, indicating which
-				 * of the 12-pixels in that 128-bit word is the
+				 * Spec says: bits [31:5] of the given address
+				 * should point to the 256-bit word containing
+				 * the desired starting pixel, and bits[4:0]
+				 * should be between 0 and 23, indicating which
+				 * of the 24-pixels in that 256-bit word is the
 				 * first pixel to be used
 				 */
 				u32 remaining_pixels = src_x % 96;
-				u32 aligned = remaining_pixels / 12;
-				u32 last_bits = remaining_pixels % 12;
+				u32 aligned = remaining_pixels / 24;
+				u32 last_bits = remaining_pixels % 24;
 
-				x_off = aligned * 16 + last_bits;
+				x_off = aligned * 32 + last_bits;
 				pix_per_tile = 96;
 			} else {
 				pix_per_tile = tile_width / fb->format->cpp[0];
@@ -2012,24 +2030,6 @@ static int vc6_plane_mode_set(struct drm_plane *plane,
 			      (long long)fb->modifier);
 		return -EINVAL;
 	}
-
-	/* fetch an extra pixel if we don't actually line up with the left edge. */
-	if ((vc4_state->src_x & 0xffff) && vc4_state->src_x < (state->fb->width << 16))
-		width++;
-
-	/* same for the right side */
-	if (((vc4_state->src_x + vc4_state->src_w[0]) & 0xffff) &&
-	    vc4_state->src_x + vc4_state->src_w[0] < (state->fb->width << 16))
-		width++;
-
-	/* now for the top */
-	if ((vc4_state->src_y & 0xffff) && vc4_state->src_y < (state->fb->height << 16))
-		height++;
-
-	/* and the bottom */
-	if (((vc4_state->src_y + vc4_state->src_h[0]) & 0xffff) &&
-	    vc4_state->src_y + vc4_state->src_h[0] < (state->fb->height << 16))
-		height++;
 
 	/* for YUV444 hardware wants double the width, otherwise it doesn't
 	 * fetch full width of chroma
