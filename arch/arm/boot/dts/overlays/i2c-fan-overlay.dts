@@ -46,29 +46,37 @@
 
 	fragment@103 {
 		target = <&cpu_thermal>;
-		polling-delay = <2000>; /* milliseconds */
 		__overlay__ {
-			trips {
-				fanmid0: fanmid0 {
-					temperature = <50000>;
-					hysteresis = <2000>;
-					type = "active";
-				};
-				fanmax0: fanmax0 {
-					temperature = <75000>;
-					hysteresis = <2000>;
-					type = "active";
-				};
+			polling-delay = <2000>; /* milliseconds */
+		};
+	};
+
+	fragment@104 {
+		target = <&thermal_trips>;
+		__overlay__ {
+			fanmid0: fanmid0 {
+				temperature = <50000>;
+				hysteresis = <2000>;
+				type = "active";
 			};
-			cooling-maps {
-				map0: map0 {
-					trip = <&fanmid0>;
-					cooling-device = <&emc2301 2 6>;
-				};
-				map1: map1 {
-					trip = <&fanmax0>;
-					cooling-device = <&emc2301 7 THERMAL_NO_LIMIT>;
-				};
+			fanmax0: fanmax0 {
+				temperature = <75000>;
+				hysteresis = <2000>;
+				type = "active";
+			};
+		};
+	};
+
+	fragment@105 {
+		target = <&cooling_maps>;
+		__overlay__ {
+			map0: map0 {
+				trip = <&fanmid0>;
+				cooling-device = <&emc2301 2 6>;
+			};
+			map1: map1 {
+				trip = <&fanmax0>;
+				cooling-device = <&emc2301 7 THERMAL_NO_LIMIT>;
 			};
 		};
 	};
@@ -86,8 +94,8 @@
 		i2c6 = <&frag100>, "target?=0",
 		       <&frag100>, "target-path=i2c6";
 		addr =		<&emc2301>,"reg:0";
-		minpwm =	<&emc2301>,"emc2305,pwm-min;0";
-		maxpwm =	<&emc2301>,"emc2305,pwm-max;0";
+		minpwm =	<&emc2301>,"emc2305,pwm-min.0";
+		maxpwm =	<&emc2301>,"emc2305,pwm-max.0";
 		midtemp =	<&fanmid0>,"temperature:0";
 		midtemp_hyst =	<&fanmid0>,"hysteresis:0";
 		maxtemp =	<&fanmax0>,"temperature:0";

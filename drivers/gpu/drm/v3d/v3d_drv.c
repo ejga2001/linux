@@ -19,13 +19,14 @@
 #include <linux/module.h>
 #include <linux/of_platform.h>
 #include <linux/platform_device.h>
-#include <linux/pm_runtime.h>
 #include <linux/reset.h>
 
 #include <drm/drm_drv.h>
-#include <drm/drm_fb_cma_helper.h>
 #include <drm/drm_fb_helper.h>
 #include <drm/drm_managed.h>
+
+#include <soc/bcm2835/raspberrypi-firmware.h>
+
 #include <uapi/drm/v3d_drm.h>
 
 #include "v3d_drv.h"
@@ -37,42 +38,6 @@
 #define DRIVER_MAJOR 1
 #define DRIVER_MINOR 0
 #define DRIVER_PATCHLEVEL 0
-
-#ifdef CONFIG_PM
-static int v3d_runtime_suspend(struct device *dev)
-{
-	struct drm_device *drm = dev_get_drvdata(dev);
-	struct v3d_dev *v3d = to_v3d_dev(drm);
-
-	v3d_irq_disable(v3d);
-
-	clk_disable_unprepare(v3d->clk);
-
-	return 0;
-}
-
-static int v3d_runtime_resume(struct device *dev)
-{
-	struct drm_device *drm = dev_get_drvdata(dev);
-	struct v3d_dev *v3d = to_v3d_dev(drm);
-	int ret;
-
-	ret = clk_prepare_enable(v3d->clk);
-	if (ret != 0)
-		return ret;
-
-	/* XXX: VPM base */
-
-	v3d_mmu_set_page_table(v3d);
-	v3d_irq_enable(v3d);
-
-	return 0;
-}
-#endif
-
-static const struct dev_pm_ops v3d_pm_ops = {
-	SET_RUNTIME_PM_OPS(v3d_runtime_suspend, v3d_runtime_resume, NULL)
-};
 
 static int v3d_get_param_ioctl(struct drm_device *dev, void *data,
 			       struct drm_file *file_priv)
@@ -228,9 +193,10 @@ static const struct drm_driver v3d_drm_driver = {
 };
 
 static const struct of_device_id v3d_of_match[] = {
+	{ .compatible = "brcm,2712-v3d" },
+	{ .compatible = "brcm,2711-v3d" },
 	{ .compatible = "brcm,7268-v3d" },
 	{ .compatible = "brcm,7278-v3d" },
-	{ .compatible = "brcm,2711-v3d" },
 	{},
 };
 MODULE_DEVICE_TABLE(of, v3d_of_match);
@@ -245,6 +211,8 @@ map_regs(struct v3d_dev *v3d, void __iomem **regs, const char *name)
 static int v3d_platform_drm_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
+	struct rpi_firmware *firmware;
+	struct device_node *node;
 	struct drm_device *drm;
 	struct v3d_dev *v3d;
 	int ret;
@@ -304,7 +272,20 @@ static int v3d_platform_drm_probe(struct platform_device *pdev)
 			dev_err(dev, "Failed to get clock (%ld)\n", PTR_ERR(v3d->clk));
 		return PTR_ERR(v3d->clk);
 	}
-	v3d->clk_up_rate = clk_get_max_rate(v3d->clk);
+
+	node = rpi_firmware_find_node();
+	if (!node)
+		return -EINVAL;
+
+	firmware = rpi_firmware_get(node);
+	of_node_put(node);
+	if (!firmware)
+		return -EPROBE_DEFER;
+
+	v3d->clk_up_rate = rpi_firmware_clk_get_max_rate(firmware,
+							 RPI_FIRMWARE_V3D_CLK_ID);
+	rpi_firmware_put(firmware);
+
 	/* For downclocking, drop it to the minimum frequency we can get from
 	 * the CPRMAN clock generator dividing off our parent.  The divider is
 	 * 4 bits, but ask for just higher than that so that rounding doesn't
@@ -325,7 +306,6 @@ static int v3d_platform_drm_probe(struct platform_device *pdev)
 		dev_err(dev, "Failed to allocate MMU scratch page\n");
 		return -ENOMEM;
 	}
-
 
 	ret = v3d_gem_init(drm);
 	if (ret)
@@ -374,7 +354,6 @@ static struct platform_driver v3d_platform_driver = {
 	.driver		= {
 		.name	= "v3d",
 		.of_match_table = v3d_of_match,
-		.pm = &v3d_pm_ops,
 	},
 };
 

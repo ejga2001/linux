@@ -20,6 +20,7 @@
 #include "panfrost_regs.h"
 #include "panfrost_gpu.h"
 #include "panfrost_mmu.h"
+#include "panfrost_dump.h"
 
 #define JOB_TIMEOUT_MS 500
 
@@ -247,6 +248,10 @@ static int panfrost_acquire_object_fences(struct drm_gem_object **bos,
 	int i, ret;
 
 	for (i = 0; i < bo_count; i++) {
+		ret = dma_resv_reserve_fences(bos[i]->resv, 1);
+		if (ret)
+			return ret;
+
 		/* panfrost always uses write mode in its current uapi */
 		ret = drm_sched_job_add_implicit_dependencies(job, bos[i],
 							      true);
@@ -264,7 +269,7 @@ static void panfrost_attach_object_fences(struct drm_gem_object **bos,
 	int i;
 
 	for (i = 0; i < bo_count; i++)
-		dma_resv_add_excl_fence(bos[i]->resv, fence);
+		dma_resv_add_fence(bos[i]->resv, fence, DMA_RESV_USAGE_WRITE);
 }
 
 int panfrost_job_push(struct panfrost_job *job)
@@ -722,6 +727,8 @@ static enum drm_gpu_sched_stat panfrost_job_timedout(struct drm_sched_job
 		job_read(pfdev, JS_HEAD_LO(js)),
 		job_read(pfdev, JS_TAIL_LO(js)),
 		sched_job);
+
+	panfrost_core_dump(job);
 
 	atomic_set(&pfdev->reset.pending, 1);
 	panfrost_reset(pfdev, sched_job);

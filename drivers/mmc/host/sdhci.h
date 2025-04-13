@@ -478,6 +478,11 @@ struct sdhci_host {
  */
 #define SDHCI_QUIRK2_USE_32BIT_BLK_CNT			(1<<18)
 
+/* Quirks to ignore a speed if a that speed is unreliable */
+#define SDHCI_QUIRK2_NO_SDR25	(1<<19)
+#define SDHCI_QUIRK2_NO_SDR50  (1<<20)
+#define SDHCI_QUIRK2_NO_SDR104	(1<<21)
+
 	int irq;		/* Device IRQ */
 	void __iomem *ioaddr;	/* Mapped address */
 	phys_addr_t mapbase;	/* physical address base */
@@ -658,6 +663,7 @@ struct sdhci_ops {
 	void	(*request_done)(struct sdhci_host *host,
 				struct mmc_request *mrq);
 	void    (*dump_vendor_regs)(struct sdhci_host *host);
+	int	(*init_sd_express)(struct sdhci_host *host, struct mmc_ios *ios);
 };
 
 #ifdef CONFIG_MMC_SDHCI_IO_ACCESSORS

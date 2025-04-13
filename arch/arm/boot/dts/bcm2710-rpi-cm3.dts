@@ -11,12 +11,15 @@
 };
 
 &cam1_reg {
-	gpio = <&gpio 2 GPIO_ACTIVE_HIGH>;
+	gpio = <&gpio 3 GPIO_ACTIVE_HIGH>;
 	status = "disabled";
 };
 
 cam0_reg: &cam0_regulator {
-	gpio = <&gpio 30 GPIO_ACTIVE_HIGH>;
+	gpio = <&gpio 31 GPIO_ACTIVE_HIGH>;
+};
+
+i2c_csi_dsi0: &i2c0 {
 };
 
 &uart0 {
@@ -190,7 +193,7 @@ cam0_reg: &cam0_regulator {
 
 &leds {
 	act_led: led-act {
-		label = "led0";
+		default-state = "off";
 		linux,default-trigger = "mmc0";
 		gpios = <&virtgpio 0 0>;
 	};
@@ -200,13 +203,15 @@ cam0_reg: &cam0_regulator {
 	hpd-gpios = <&expgpio 0 GPIO_ACTIVE_LOW>;
 };
 
-&audio {
+&vchiq {
 	pinctrl-names = "default";
 	pinctrl-0 = <&audio_pins>;
 };
 
 / {
 	__overrides__ {
+		audio = <&chosen>,"bootargs{on='snd_bcm2835.enable_hdmi=1',off='snd_bcm2835.enable_hdmi=0'}";
+
 		act_led_gpio = <&act_led>,"gpios:4";
 		act_led_activelow = <&act_led>,"gpios:8";
 		act_led_trigger = <&act_led>,"linux,default-trigger";

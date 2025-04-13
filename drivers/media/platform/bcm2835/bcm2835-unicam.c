@@ -126,8 +126,11 @@ MODULE_PARM_DESC(media_controller, "Use media controller API");
 #define UNICAM_EMBEDDED_SIZE	16384
 
 /*
- * Size of the dummy buffer. Can be any size really, but the DMA
- * allocation works in units of page sizes.
+ * Size of the dummy buffer allocation.
+ *
+ * Due to a HW bug causing buffer overruns in circular buffer mode under certain
+ * (not yet fully known) conditions, the dummy buffer allocation is set to a
+ * a single page size, but the hardware gets programmed with a buffer size of 0.
  */
 #define DUMMY_BUF_SIZE		(PAGE_SIZE)
 
@@ -519,6 +522,7 @@ struct unicam_device {
 	/* subdevice async Notifier */
 	struct v4l2_async_notifier notifier;
 	unsigned int sequence;
+	bool frame_started;
 
 	/* ptr to  sub device */
 	struct v4l2_subdev *sensor;
@@ -2076,7 +2080,7 @@ static int unicam_mc_video_link_validate(struct media_link *link)
 	struct v4l2_subdev_format source_fmt;
 	int ret;
 
-	if (!media_entity_remote_pad(link->sink->entity->pads)) {
+	if (!media_entity_remote_source_pad_unique(link->sink->entity)) {
 		unicam_dbg(1, unicam,
 			   "video node %s pad not connected\n", vd->name);
 		return -ENOTCONN;
@@ -2522,7 +2526,8 @@ static int unicam_start_streaming(struct vb2_queue *vq, unsigned int count)
 		goto err_streaming;
 	}
 
-	ret = media_pipeline_start(&node->video_dev.entity, &node->pipe);
+	ret = media_pipeline_start(dev->node[IMAGE_PAD].video_dev.entity.pads,
+				   &dev->node[IMAGE_PAD].pipe);
 	if (ret < 0) {
 		unicam_err(dev, "Failed to start media pipeline: %d\n", ret);
 		goto err_pm_put;
@@ -2616,7 +2621,8 @@ err_vpu_clock:
 		unicam_err(dev, "failed to reset the VPU clock\n");
 	clk_disable_unprepare(dev->vpu_clock);
 error_pipeline:
-	media_pipeline_stop(&node->video_dev.entity);
+	if (node->pad_id == IMAGE_PAD)
+		media_pipeline_stop(dev->node[IMAGE_PAD].video_dev.entity.pads);
 err_pm_put:
 	unicam_runtime_put(dev);
 err_streaming:
@@ -2644,7 +2650,7 @@ static void unicam_stop_streaming(struct vb2_queue *vq)
 
 		unicam_disable(dev);
 
-		media_pipeline_stop(&node->video_dev.entity);
+		media_pipeline_stop(node->video_dev.entity.pads);
 
 		if (dev->clocks_enabled) {
 			if (clk_set_min_rate(dev->vpu_clock, 0))
@@ -2780,7 +2786,7 @@ static void unicam_release(struct kref *kref)
 	media_device_cleanup(&unicam->mdev);
 
 	if (unicam->sensor_state)
-		v4l2_subdev_free_state(unicam->sensor_state);
+		__v4l2_subdev_state_free(unicam->sensor_state);
 
 	kfree(unicam);
 }
@@ -3115,13 +3121,15 @@ static void unregister_nodes(struct unicam_device *unicam)
 
 static int unicam_async_complete(struct v4l2_async_notifier *notifier)
 {
+	static struct lock_class_key key;
 	struct unicam_device *unicam = to_unicam_device(notifier->v4l2_dev);
 	unsigned int i, source_pads = 0;
 	int ret;
 
 	unicam->v4l2_dev.notify = unicam_notify;
 
-	unicam->sensor_state = v4l2_subdev_alloc_state(unicam->sensor);
+	unicam->sensor_state = __v4l2_subdev_state_alloc(unicam->sensor,
+							 "unicam:async->lock", &key);
 	if (!unicam->sensor_state)
 		return -ENOMEM;
 

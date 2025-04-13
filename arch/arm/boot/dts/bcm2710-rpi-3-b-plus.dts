@@ -12,7 +12,7 @@
 	model = "Raspberry Pi 3 Model B+";
 
 	chosen {
-		bootargs = "coherent_pool=1M 8250.nr_uarts=1 snd_bcm2835.enable_compat_alsa=0 snd_bcm2835.enable_hdmi=1";
+		bootargs = "coherent_pool=1M 8250.nr_uarts=1 snd_bcm2835.enable_headphones=0";
 	};
 
 	aliases {
@@ -140,9 +140,16 @@
 		brcm,pull;
 	};
 
+	uart1_bt_pins: uart1_bt_pins {
+		brcm,pins = <32 33 30 31>;
+		brcm,function = <BCM2835_FSEL_ALT5>; /* alt5=UART1 */
+		brcm,pull = <0 2 2 0>;
+	};
+
 	audio_pins: audio_pins {
 		brcm,pins = <40 41>;
 		brcm,function = <4>;
+		brcm,pull = <0>;
 	};
 };
 
@@ -232,13 +239,14 @@
 
 &leds {
 	act_led: led-act {
-		label = "led0";
+		default-state = "off";
 		linux,default-trigger = "mmc0";
 		gpios = <&gpio 29 0>;
 	};
 
 	pwr_led: led-pwr {
-		label = "led1";
+		label = "PWR";
+		default-state = "off";
 		linux,default-trigger = "default-on";
 		gpios = <&expgpio 2 GPIO_ACTIVE_LOW>;
 	};
@@ -248,7 +256,7 @@
 	hpd-gpios = <&gpio 28 GPIO_ACTIVE_LOW>;
 };
 
-&audio {
+&vchiq {
 	pinctrl-names = "default";
 	pinctrl-0 = <&audio_pins>;
 };
@@ -266,8 +274,13 @@
 cam0_reg: &cam_dummy_reg {
 };
 
+i2c_csi_dsi0: &i2c0 {
+};
+
 / {
 	__overrides__ {
+		audio = <&chosen>,"bootargs{on='snd_bcm2835.enable_headphones=1 snd_bcm2835.enable_hdmi=1',off='snd_bcm2835.enable_headphones=0 snd_bcm2835.enable_hdmi=0'}";
+
 		act_led_gpio = <&act_led>,"gpios:4";
 		act_led_activelow = <&act_led>,"gpios:8";
 		act_led_trigger = <&act_led>,"linux,default-trigger";

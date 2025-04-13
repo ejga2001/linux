@@ -7,7 +7,6 @@
 #include <linux/clk.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
-#include <linux/pm_runtime.h>
 #include <linux/reset.h>
 #include <linux/sched/signal.h>
 #include <linux/uaccess.h>
@@ -89,6 +88,9 @@ v3d_init_hw_state(struct v3d_dev *v3d)
 static void
 v3d_idle_axi(struct v3d_dev *v3d, int core)
 {
+	if (v3d->ver >= 71)
+		return;
+
 	V3D_CORE_WRITE(core, V3D_GMP_CFG, V3D_GMP_CFG_STOP_REQ);
 
 	if (wait_for((V3D_CORE_READ(core, V3D_GMP_STATUS) &
@@ -301,16 +303,21 @@ v3d_lock_bo_reservations(struct v3d_job *job,
 		return ret;
 
 	for (i = 0; i < job->bo_count; i++) {
+		ret = dma_resv_reserve_fences(job->bo[i]->resv, 1);
+		if (ret)
+			goto fail;
+
 		ret = drm_sched_job_add_implicit_dependencies(&job->base,
 							      job->bo[i], true);
-		if (ret) {
-			drm_gem_unlock_reservations(job->bo, job->bo_count,
-						    acquire_ctx);
-			return ret;
-		}
+		if (ret)
+			goto fail;
 	}
 
 	return 0;
+
+fail:
+	drm_gem_unlock_reservations(job->bo, job->bo_count, acquire_ctx);
+	return ret;
 }
 
 /**
@@ -351,7 +358,7 @@ v3d_lookup_bos(struct drm_device *dev,
 	}
 
 	job->bo = kvmalloc_array(job->bo_count,
-				 sizeof(struct drm_gem_cma_object *),
+				 sizeof(struct drm_gem_dma_object *),
 				 GFP_KERNEL | __GFP_ZERO);
 	if (!job->bo) {
 		DRM_DEBUG("Failed to allocate validated BO pointers\n");
@@ -512,15 +519,12 @@ v3d_job_init(struct v3d_dev *v3d, struct drm_file *file_priv,
 	job = *container;
 	job->v3d = v3d;
 	job->free = free;
-
-	ret = pm_runtime_get_sync(v3d->drm.dev);
-	if (ret < 0 && ret != -EACCES)
-		goto fail;
+	job->client_pid = current->pid;
 
 	ret = drm_sched_job_init(&job->base, &v3d_priv->sched_entity[queue],
 				 v3d_priv);
 	if (ret)
-		goto fail_job;
+		goto fail;
 
 	if (has_multisync) {
 		if (se->in_sync_count && se->wait_stage == queue) {
@@ -552,8 +556,6 @@ v3d_job_init(struct v3d_dev *v3d, struct drm_file *file_priv,
 
 fail_deps:
 	drm_sched_job_cleanup(&job->base);
-fail_job:
-	pm_runtime_put_autosuspend(v3d->drm.dev);
 fail:
 	kfree(*container);
 	*container = NULL;
@@ -588,8 +590,8 @@ v3d_attach_fences_and_unlock_reservation(struct drm_file *file_priv,
 
 	for (i = 0; i < job->bo_count; i++) {
 		/* XXX: Use shared fences for read-only objects. */
-		dma_resv_add_excl_fence(job->bo[i]->resv,
-					job->done_fence);
+		dma_resv_add_fence(job->bo[i]->resv, job->done_fence,
+				   DMA_RESV_USAGE_WRITE);
 	}
 
 	drm_gem_unlock_reservations(job->bo, job->bo_count, acquire_ctx);
@@ -1147,7 +1149,7 @@ v3d_gem_init(struct drm_device *dev)
 	if (!v3d->pt) {
 		drm_mm_takedown(&v3d->mm);
 		dev_err(v3d->drm.dev,
-			"Failed to allocate page tables. Please ensure you have CMA enabled.\n");
+			"Failed to allocate page tables. Please ensure you have DMA enabled.\n");
 		return -ENOMEM;
 	}
 

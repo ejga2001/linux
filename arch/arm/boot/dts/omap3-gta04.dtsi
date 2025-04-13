@@ -127,7 +127,7 @@
 			spi-cpol;
 			spi-cpha;
 
-			backlight= <&backlight>;
+			backlight = <&backlight>;
 			label = "lcd";
 			port {
 				lcd_in: endpoint {
@@ -610,6 +610,22 @@
 
 &i2c3 {
 	clock-frequency = <100000>;
+};
+
+&mcspi1 {
+	status = "disabled";
+};
+
+&mcspi2 {
+	status = "disabled";
+};
+
+&mcspi3 {
+	status = "disabled";
+};
+
+&mcspi4 {
+	status = "disabled";
 };
 
 &usb_otg_hs {

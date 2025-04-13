@@ -106,6 +106,7 @@
 	audio_pins: audio_pins {
 		brcm,pins = <40 45>;
 		brcm,function = <4>;
+		brcm,pull = <0>;
 	};
 };
 
@@ -156,13 +157,14 @@
 
 &leds {
 	act_led: led-act {
-		label = "led0";
+		default-state = "off";
 		linux,default-trigger = "mmc0";
 		gpios = <&gpio 47 0>;
 	};
 
 	pwr_led: led-pwr {
-		label = "led1";
+		label = "PWR";
+		default-state = "off";
 		linux,default-trigger = "input";
 		gpios = <&gpio 35 0>;
 	};
@@ -172,7 +174,7 @@
 	hpd-gpios = <&gpio 46 GPIO_ACTIVE_LOW>;
 };
 
-&audio {
+&vchiq {
 	pinctrl-names = "default";
 	pinctrl-0 = <&audio_pins>;
 };
@@ -184,8 +186,13 @@
 cam0_reg: &cam_dummy_reg {
 };
 
+i2c_csi_dsi0: &i2c0 {
+};
+
 / {
 	__overrides__ {
+		audio = <&chosen>,"bootargs{on='snd_bcm2835.enable_headphones=1 snd_bcm2835.enable_hdmi=1',off='snd_bcm2835.enable_headphones=0 snd_bcm2835.enable_hdmi=0'}";
+
 		act_led_gpio = <&act_led>,"gpios:4";
 		act_led_activelow = <&act_led>,"gpios:8";
 		act_led_trigger = <&act_led>,"linux,default-trigger";

@@ -82,7 +82,7 @@ static void get_raw_dev_status(struct msm_gpu *gpu,
 	mutex_unlock(&df->lock);
 
 	busy_time *= USEC_PER_SEC;
-	do_div(busy_time, sample_rate);
+	busy_time = div64_ul(busy_time, sample_rate);
 	if (WARN_ON(busy_time > ~0LU))
 		busy_time = ~0LU;
 
@@ -213,6 +213,8 @@ void msm_devfreq_init(struct msm_gpu *gpu)
 
 	if (IS_ERR(df->devfreq)) {
 		DRM_DEV_ERROR(&gpu->pdev->dev, "Couldn't initialize GPU devfreq\n");
+		dev_pm_qos_remove_request(&df->idle_freq);
+		dev_pm_qos_remove_request(&df->boost_freq);
 		df->devfreq = NULL;
 		return;
 	}
@@ -325,7 +327,6 @@ void msm_devfreq_boost(struct msm_gpu *gpu, unsigned factor)
 void msm_devfreq_active(struct msm_gpu *gpu)
 {
 	struct msm_gpu_devfreq *df = &gpu->devfreq;
-	struct devfreq_dev_status status;
 	unsigned int idle_time;
 
 	if (!has_devfreq(gpu))
@@ -349,12 +350,6 @@ void msm_devfreq_active(struct msm_gpu *gpu)
 
 	dev_pm_qos_update_request(&df->idle_freq,
 				  PM_QOS_MAX_FREQUENCY_DEFAULT_VALUE);
-
-	/*
-	 * Reset the polling interval so we aren't inconsistent
-	 * about freq vs busy/total cycles
-	 */
-	msm_devfreq_get_dev_status(&gpu->pdev->dev, &status);
 }
 
 

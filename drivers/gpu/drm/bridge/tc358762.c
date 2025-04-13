@@ -61,7 +61,6 @@
 struct tc358762 {
 	struct device *dev;
 	struct drm_bridge bridge;
-	struct drm_connector connector;
 	struct regulator *regulator;
 	struct drm_bridge *panel_bridge;
 	bool pre_enabled;
@@ -179,15 +178,8 @@ static int tc358762_parse_dt(struct tc358762 *ctx)
 {
 	struct drm_bridge *panel_bridge;
 	struct device *dev = ctx->dev;
-	struct drm_panel *panel;
-	int ret;
 
-	ret = drm_of_find_panel_or_bridge(dev->of_node, 1, 0, &panel, NULL);
-	if (ret)
-		return ret;
-
-	panel_bridge = devm_drm_panel_bridge_add(dev, panel);
-
+	panel_bridge = devm_drm_of_get_bridge(dev, dev->of_node, 1, 0);
 	if (IS_ERR(panel_bridge))
 		return PTR_ERR(panel_bridge);
 
@@ -237,7 +229,7 @@ static int tc358762_probe(struct mipi_dsi_device *dsi)
 	ctx->bridge.funcs = &tc358762_bridge_funcs;
 	ctx->bridge.type = DRM_MODE_CONNECTOR_DPI;
 	ctx->bridge.of_node = dev->of_node;
-	ctx->bridge.pre_enable_upstream_first = true;
+	ctx->bridge.pre_enable_prev_first = true;
 
 	drm_bridge_add(&ctx->bridge);
 
@@ -250,14 +242,12 @@ static int tc358762_probe(struct mipi_dsi_device *dsi)
 	return ret;
 }
 
-static int tc358762_remove(struct mipi_dsi_device *dsi)
+static void tc358762_remove(struct mipi_dsi_device *dsi)
 {
 	struct tc358762 *ctx = mipi_dsi_get_drvdata(dsi);
 
 	mipi_dsi_detach(dsi);
 	drm_bridge_remove(&ctx->bridge);
-
-	return 0;
 }
 
 static const struct of_device_id tc358762_of_match[] = {

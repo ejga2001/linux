@@ -76,7 +76,7 @@ vc4_get_hang_state_ioctl(struct drm_device *dev, void *data,
 	u32 i;
 	int ret = 0;
 
-	if (WARN_ON_ONCE(vc4->is_vc5))
+	if (WARN_ON_ONCE(vc4->gen > VC4_GEN_4))
 		return -ENODEV;
 
 	if (!vc4->v3d) {
@@ -126,7 +126,7 @@ vc4_get_hang_state_ioctl(struct drm_device *dev, void *data,
 			goto err_delete_handle;
 		}
 		bo_state[i].handle = handle;
-		bo_state[i].paddr = vc4_bo->base.paddr;
+		bo_state[i].paddr = vc4_bo->base.dma_addr;
 		bo_state[i].size = vc4_bo->base.base.size;
 	}
 
@@ -389,7 +389,7 @@ vc4_wait_for_seqno(struct drm_device *dev, uint64_t seqno, uint64_t timeout_ns,
 	unsigned long timeout_expire;
 	DEFINE_WAIT(wait);
 
-	if (WARN_ON_ONCE(vc4->is_vc5))
+	if (WARN_ON_ONCE(vc4->gen > VC4_GEN_4))
 		return -ENODEV;
 
 	if (vc4->finished_seqno >= seqno)
@@ -474,7 +474,7 @@ vc4_submit_next_bin_job(struct drm_device *dev)
 	struct vc4_dev *vc4 = to_vc4_dev(dev);
 	struct vc4_exec_info *exec;
 
-	if (WARN_ON_ONCE(vc4->is_vc5))
+	if (WARN_ON_ONCE(vc4->gen > VC4_GEN_4))
 		return;
 
 again:
@@ -494,6 +494,8 @@ again:
 	 * immediately move it to the to-be-rendered queue.
 	 */
 	if (exec->ct0ca != exec->ct0ea) {
+		trace_vc4_submit_cl(dev, false, exec->seqno, exec->ct0ca,
+				    exec->ct0ea);
 		submit_cl(dev, 0, exec->ct0ca, exec->ct0ea);
 	} else {
 		struct vc4_exec_info *next;
@@ -520,7 +522,7 @@ vc4_submit_next_render_job(struct drm_device *dev)
 	if (!exec)
 		return;
 
-	if (WARN_ON_ONCE(vc4->is_vc5))
+	if (WARN_ON_ONCE(vc4->gen > VC4_GEN_4))
 		return;
 
 	/* A previous RCL may have written to one of our textures, and
@@ -531,6 +533,7 @@ vc4_submit_next_render_job(struct drm_device *dev)
 	 */
 	vc4_flush_texture_caches(dev);
 
+	trace_vc4_submit_cl(dev, true, exec->seqno, exec->ct1ca, exec->ct1ea);
 	submit_cl(dev, 1, exec->ct1ca, exec->ct1ea);
 }
 
@@ -540,7 +543,7 @@ vc4_move_job_to_render(struct drm_device *dev, struct vc4_exec_info *exec)
 	struct vc4_dev *vc4 = to_vc4_dev(dev);
 	bool was_empty = list_empty(&vc4->render_job_list);
 
-	if (WARN_ON_ONCE(vc4->is_vc5))
+	if (WARN_ON_ONCE(vc4->gen > VC4_GEN_4))
 		return;
 
 	list_move_tail(&exec->head, &vc4->render_job_list);
@@ -558,7 +561,8 @@ vc4_update_bo_seqnos(struct vc4_exec_info *exec, uint64_t seqno)
 		bo = to_vc4_bo(&exec->bo[i]->base);
 		bo->seqno = seqno;
 
-		dma_resv_add_shared_fence(bo->base.base.resv, exec->fence);
+		dma_resv_add_fence(bo->base.base.resv, exec->fence,
+				   DMA_RESV_USAGE_READ);
 	}
 
 	list_for_each_entry(bo, &exec->unref_list, unref_head) {
@@ -569,7 +573,8 @@ vc4_update_bo_seqnos(struct vc4_exec_info *exec, uint64_t seqno)
 		bo = to_vc4_bo(&exec->rcl_write_bo[i]->base);
 		bo->write_seqno = seqno;
 
-		dma_resv_add_excl_fence(bo->base.base.resv, exec->fence);
+		dma_resv_add_fence(bo->base.base.resv, exec->fence,
+				   DMA_RESV_USAGE_WRITE);
 	}
 }
 
@@ -656,7 +661,7 @@ retry:
 	for (i = 0; i < exec->bo_count; i++) {
 		bo = &exec->bo[i]->base;
 
-		ret = dma_resv_reserve_shared(bo->resv, 1);
+		ret = dma_resv_reserve_fences(bo->resv, 1);
 		if (ret) {
 			vc4_unlock_bo_reservations(dev, exec, acquire_ctx);
 			return ret;
@@ -759,7 +764,7 @@ vc4_cl_lookup_bos(struct drm_device *dev,
 	}
 
 	exec->bo = kvmalloc_array(exec->bo_count,
-				    sizeof(struct drm_gem_cma_object *),
+				    sizeof(struct drm_gem_dma_object *),
 				    GFP_KERNEL | __GFP_ZERO);
 	if (!exec->bo) {
 		DRM_ERROR("Failed to allocate validated BO pointers\n");
@@ -792,7 +797,7 @@ vc4_cl_lookup_bos(struct drm_device *dev,
 		}
 
 		drm_gem_object_get(bo);
-		exec->bo[i] = (struct drm_gem_cma_object *)bo;
+		exec->bo[i] = (struct drm_gem_dma_object *)bo;
 	}
 	spin_unlock(&file_priv->table_lock);
 
@@ -912,16 +917,16 @@ vc4_get_bcl(struct drm_device *dev, struct vc4_exec_info *exec)
 	list_add_tail(&to_vc4_bo(&exec->exec_bo->base)->unref_head,
 		      &exec->unref_list);
 
-	exec->ct0ca = exec->exec_bo->paddr + bin_offset;
+	exec->ct0ca = exec->exec_bo->dma_addr + bin_offset;
 
 	exec->bin_u = bin;
 
 	exec->shader_rec_v = exec->exec_bo->vaddr + shader_rec_offset;
-	exec->shader_rec_p = exec->exec_bo->paddr + shader_rec_offset;
+	exec->shader_rec_p = exec->exec_bo->dma_addr + shader_rec_offset;
 	exec->shader_rec_size = args->shader_rec_size;
 
 	exec->uniforms_v = exec->exec_bo->vaddr + uniforms_offset;
-	exec->uniforms_p = exec->exec_bo->paddr + uniforms_offset;
+	exec->uniforms_p = exec->exec_bo->dma_addr + uniforms_offset;
 	exec->uniforms_size = args->uniforms_size;
 
 	ret = vc4_validate_bin_cl(dev,
@@ -1007,7 +1012,7 @@ vc4_job_handle_completed(struct vc4_dev *vc4)
 	unsigned long irqflags;
 	struct vc4_seqno_cb *cb, *cb_temp;
 
-	if (WARN_ON_ONCE(vc4->is_vc5))
+	if (WARN_ON_ONCE(vc4->gen > VC4_GEN_4))
 		return;
 
 	spin_lock_irqsave(&vc4->job_lock, irqflags);
@@ -1046,7 +1051,7 @@ int vc4_queue_seqno_cb(struct drm_device *dev,
 	struct vc4_dev *vc4 = to_vc4_dev(dev);
 	unsigned long irqflags;
 
-	if (WARN_ON_ONCE(vc4->is_vc5))
+	if (WARN_ON_ONCE(vc4->gen > VC4_GEN_4))
 		return -ENODEV;
 
 	cb->func = func;
@@ -1102,7 +1107,7 @@ vc4_wait_seqno_ioctl(struct drm_device *dev, void *data,
 	struct vc4_dev *vc4 = to_vc4_dev(dev);
 	struct drm_vc4_wait_seqno *args = data;
 
-	if (WARN_ON_ONCE(vc4->is_vc5))
+	if (WARN_ON_ONCE(vc4->gen > VC4_GEN_4))
 		return -ENODEV;
 
 	return vc4_wait_for_seqno_ioctl_helper(dev, args->seqno,
@@ -1119,7 +1124,7 @@ vc4_wait_bo_ioctl(struct drm_device *dev, void *data,
 	struct drm_gem_object *gem_obj;
 	struct vc4_bo *bo;
 
-	if (WARN_ON_ONCE(vc4->is_vc5))
+	if (WARN_ON_ONCE(vc4->gen > VC4_GEN_4))
 		return -ENODEV;
 
 	if (args->pad != 0)
@@ -1164,7 +1169,11 @@ vc4_submit_cl_ioctl(struct drm_device *dev, void *data,
 	struct dma_fence *in_fence;
 	int ret = 0;
 
-	if (WARN_ON_ONCE(vc4->is_vc5))
+	trace_vc4_submit_cl_ioctl(dev, args->bin_cl_size,
+				  args->shader_rec_size,
+				  args->bo_handle_count);
+
+	if (WARN_ON_ONCE(vc4->gen > VC4_GEN_4))
 		return -ENODEV;
 
 	if (!vc4->v3d) {
@@ -1299,8 +1308,9 @@ static void vc4_gem_destroy(struct drm_device *dev, void *unused);
 int vc4_gem_init(struct drm_device *dev)
 {
 	struct vc4_dev *vc4 = to_vc4_dev(dev);
+	int ret;
 
-	if (WARN_ON_ONCE(vc4->is_vc5))
+	if (WARN_ON_ONCE(vc4->gen > VC4_GEN_4))
 		return -ENODEV;
 
 	vc4->dma_fence_context = dma_fence_context_alloc(1);
@@ -1316,10 +1326,15 @@ int vc4_gem_init(struct drm_device *dev)
 
 	INIT_WORK(&vc4->job_done_work, vc4_job_done_work);
 
-	mutex_init(&vc4->power_lock);
+	ret = drmm_mutex_init(dev, &vc4->power_lock);
+	if (ret)
+		return ret;
 
 	INIT_LIST_HEAD(&vc4->purgeable.list);
-	mutex_init(&vc4->purgeable.lock);
+
+	ret = drmm_mutex_init(dev, &vc4->purgeable.lock);
+	if (ret)
+		return ret;
 
 	return drmm_add_action_or_reset(dev, vc4_gem_destroy, NULL);
 }
@@ -1354,7 +1369,7 @@ int vc4_gem_madvise_ioctl(struct drm_device *dev, void *data,
 	struct vc4_bo *bo;
 	int ret;
 
-	if (WARN_ON_ONCE(vc4->is_vc5))
+	if (WARN_ON_ONCE(vc4->gen > VC4_GEN_4))
 		return -ENODEV;
 
 	switch (args->madv) {

@@ -9,6 +9,7 @@
 #include <drm/drm_file.h>
 #include <drm/drm_framebuffer.h>
 #include <drm/drm_gem_atomic_helper.h>
+#include <drm/drm_gem_framebuffer_helper.h>
 #include <drm/drm_gem_ttm_helper.h>
 #include <drm/drm_gem_vram_helper.h>
 #include <drm/drm_managed.h>
@@ -43,7 +44,7 @@ static const struct drm_gem_object_funcs drm_gem_vram_object_funcs;
  * the frame's scanout buffer or the cursor image. If there's no more space
  * left in VRAM, inactive GEM objects can be moved to system memory.
  *
- * To initialize the VRAM helper library call drmm_vram_helper_alloc_mm().
+ * To initialize the VRAM helper library call drmm_vram_helper_init().
  * The function allocates and initializes an instance of &struct drm_vram_mm
  * in &struct drm_device.vram_mm . Use &DRM_GEM_VRAM_DRIVER to initialize
  * &struct drm_driver and  &DRM_VRAM_MM_FILE_OPERATIONS to initialize
@@ -71,7 +72,7 @@ static const struct drm_gem_object_funcs drm_gem_vram_object_funcs;
  *		// setup device, vram base and size
  *		// ...
  *
- *		ret = drmm_vram_helper_alloc_mm(dev, vram_base, vram_size);
+ *		ret = drmm_vram_helper_init(dev, vram_base, vram_size);
  *		if (ret)
  *			return ret;
  *		return 0;
@@ -84,7 +85,7 @@ static const struct drm_gem_object_funcs drm_gem_vram_object_funcs;
  * to userspace.
  *
  * You don't have to clean up the instance of VRAM MM.
- * drmm_vram_helper_alloc_mm() is a managed interface that installs a
+ * drmm_vram_helper_init() is a managed interface that installs a
  * clean-up handler to run during the DRM device's release.
  *
  * For drawing or scanout operations, rsp. buffer objects have to be pinned
@@ -225,9 +226,9 @@ struct drm_gem_vram_object *drm_gem_vram_create(struct drm_device *dev,
 	 * A failing ttm_bo_init will call ttm_buffer_object_destroy
 	 * to release gbo->bo.base and kfree gbo.
 	 */
-	ret = ttm_bo_init(bdev, &gbo->bo, size, ttm_bo_type_device,
-			  &gbo->placement, pg_align, false, NULL, NULL,
-			  ttm_buffer_object_destroy);
+	ret = ttm_bo_init_validate(bdev, &gbo->bo, ttm_bo_type_device,
+				   &gbo->placement, pg_align, false, NULL, NULL,
+				   ttm_buffer_object_destroy);
 	if (ret)
 		return ERR_PTR(ret);
 
@@ -630,6 +631,24 @@ EXPORT_SYMBOL(drm_gem_vram_driver_dumb_create);
  * Helpers for struct drm_plane_helper_funcs
  */
 
+static void __drm_gem_vram_plane_helper_cleanup_fb(struct drm_plane *plane,
+						   struct drm_plane_state *state,
+						   unsigned int num_planes)
+{
+	struct drm_gem_object *obj;
+	struct drm_gem_vram_object *gbo;
+	struct drm_framebuffer *fb = state->fb;
+
+	while (num_planes) {
+		--num_planes;
+		obj = drm_gem_fb_get_obj(fb, num_planes);
+		if (!obj)
+			continue;
+		gbo = drm_gem_vram_of_gem(obj);
+		drm_gem_vram_unpin(gbo);
+	}
+}
+
 /**
  * drm_gem_vram_plane_helper_prepare_fb() - \
  *	Implements &struct drm_plane_helper_funcs.prepare_fb
@@ -648,17 +667,22 @@ int
 drm_gem_vram_plane_helper_prepare_fb(struct drm_plane *plane,
 				     struct drm_plane_state *new_state)
 {
-	size_t i;
+	struct drm_framebuffer *fb = new_state->fb;
 	struct drm_gem_vram_object *gbo;
+	struct drm_gem_object *obj;
+	unsigned int i;
 	int ret;
 
-	if (!new_state->fb)
+	if (!fb)
 		return 0;
 
-	for (i = 0; i < ARRAY_SIZE(new_state->fb->obj); ++i) {
-		if (!new_state->fb->obj[i])
-			continue;
-		gbo = drm_gem_vram_of_gem(new_state->fb->obj[i]);
+	for (i = 0; i < fb->format->num_planes; ++i) {
+		obj = drm_gem_fb_get_obj(fb, i);
+		if (!obj) {
+			ret = -EINVAL;
+			goto err_drm_gem_vram_unpin;
+		}
+		gbo = drm_gem_vram_of_gem(obj);
 		ret = drm_gem_vram_pin(gbo, DRM_GEM_VRAM_PL_FLAG_VRAM);
 		if (ret)
 			goto err_drm_gem_vram_unpin;
@@ -671,11 +695,7 @@ drm_gem_vram_plane_helper_prepare_fb(struct drm_plane *plane,
 	return 0;
 
 err_drm_gem_vram_unpin:
-	while (i) {
-		--i;
-		gbo = drm_gem_vram_of_gem(new_state->fb->obj[i]);
-		drm_gem_vram_unpin(gbo);
-	}
+	__drm_gem_vram_plane_helper_cleanup_fb(plane, new_state, i);
 	return ret;
 }
 EXPORT_SYMBOL(drm_gem_vram_plane_helper_prepare_fb);
@@ -694,18 +714,12 @@ void
 drm_gem_vram_plane_helper_cleanup_fb(struct drm_plane *plane,
 				     struct drm_plane_state *old_state)
 {
-	size_t i;
-	struct drm_gem_vram_object *gbo;
+	struct drm_framebuffer *fb = old_state->fb;
 
-	if (!old_state->fb)
+	if (!fb)
 		return;
 
-	for (i = 0; i < ARRAY_SIZE(old_state->fb->obj); ++i) {
-		if (!old_state->fb->obj[i])
-			continue;
-		gbo = drm_gem_vram_of_gem(old_state->fb->obj[i]);
-		drm_gem_vram_unpin(gbo);
-	}
+	__drm_gem_vram_plane_helper_cleanup_fb(plane, old_state, fb->format->num_planes);
 }
 EXPORT_SYMBOL(drm_gem_vram_plane_helper_cleanup_fb);
 
@@ -867,7 +881,7 @@ static struct ttm_tt *bo_driver_ttm_tt_create(struct ttm_buffer_object *bo,
 	if (!tt)
 		return NULL;
 
-	ret = ttm_tt_init(tt, bo, page_flags, ttm_cached);
+	ret = ttm_tt_init(tt, bo, page_flags, ttm_cached, 0);
 	if (ret < 0)
 		goto err_ttm_tt_init;
 

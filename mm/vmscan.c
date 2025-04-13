@@ -612,7 +612,7 @@ static unsigned long lruvec_lru_size(struct lruvec *lruvec, enum lru_list lru,
 /*
  * Add a shrinker callback to be called from the vm.
  */
-int prealloc_shrinker(struct shrinker *shrinker)
+static int __prealloc_shrinker(struct shrinker *shrinker)
 {
 	unsigned int size;
 	int err;
@@ -636,6 +636,33 @@ int prealloc_shrinker(struct shrinker *shrinker)
 	return 0;
 }
 
+#ifdef CONFIG_SHRINKER_DEBUG
+int prealloc_shrinker(struct shrinker *shrinker, const char *fmt, ...)
+{
+	va_list ap;
+	int err;
+
+	va_start(ap, fmt);
+	shrinker->name = kvasprintf_const(GFP_KERNEL, fmt, ap);
+	va_end(ap);
+	if (!shrinker->name)
+		return -ENOMEM;
+
+	err = __prealloc_shrinker(shrinker);
+	if (err) {
+		kfree_const(shrinker->name);
+		shrinker->name = NULL;
+	}
+
+	return err;
+}
+#else
+int prealloc_shrinker(struct shrinker *shrinker, const char *fmt, ...)
+{
+	return __prealloc_shrinker(shrinker);
+}
+#endif
+
 void free_prealloced_shrinker(struct shrinker *shrinker)
 {
 	if (shrinker->flags & SHRINKER_MEMCG_AWARE) {
@@ -657,15 +684,41 @@ void register_shrinker_prepared(struct shrinker *shrinker)
 	up_write(&shrinker_rwsem);
 }
 
-int register_shrinker(struct shrinker *shrinker)
+static int __register_shrinker(struct shrinker *shrinker)
 {
-	int err = prealloc_shrinker(shrinker);
+	int err = __prealloc_shrinker(shrinker);
 
 	if (err)
 		return err;
 	register_shrinker_prepared(shrinker);
 	return 0;
 }
+
+#ifdef CONFIG_SHRINKER_DEBUG
+int register_shrinker(struct shrinker *shrinker, const char *fmt, ...)
+{
+	va_list ap;
+	int err;
+
+	va_start(ap, fmt);
+	shrinker->name = kvasprintf_const(GFP_KERNEL, fmt, ap);
+	va_end(ap);
+	if (!shrinker->name)
+		return -ENOMEM;
+
+	err = __register_shrinker(shrinker);
+	if (err) {
+		kfree_const(shrinker->name);
+		shrinker->name = NULL;
+	}
+	return err;
+}
+#else
+int register_shrinker(struct shrinker *shrinker, const char *fmt, ...)
+{
+	return __register_shrinker(shrinker);
+}
+#endif
 EXPORT_SYMBOL(register_shrinker);
 
 /*

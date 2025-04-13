@@ -84,6 +84,8 @@
 #define GEM_DMACFG		0x0010 /* DMA Configuration */
 #define GEM_JML			0x0048 /* Jumbo Max Length */
 #define GEM_HS_MAC_CONFIG	0x0050 /* GEM high speed config */
+#define GEM_AMP			0x0054 /* AXI Max Pipeline */
+#define GEM_INTMOD		0x005c /* Interrupt moderation */
 #define GEM_HRB			0x0080 /* Hash Bottom */
 #define GEM_HRT			0x0084 /* Hash Top */
 #define GEM_SA1B		0x0088 /* Specific1 Bottom */
@@ -95,6 +97,8 @@
 #define GEM_SA4B		0x00A0 /* Specific4 Bottom */
 #define GEM_SA4T		0x00A4 /* Specific4 Top */
 #define GEM_WOL			0x00b8 /* Wake on LAN */
+#define GEM_RXPTPUNI		0x00D4 /* PTP RX Unicast address */
+#define GEM_TXPTPUNI		0x00D8 /* PTP TX Unicast address */
 #define GEM_EFTSH		0x00e8 /* PTP Event Frame Transmitted Seconds Register 47:32 */
 #define GEM_EFRSH		0x00ec /* PTP Event Frame Received Seconds Register 47:32 */
 #define GEM_PEFTSH		0x00f0 /* PTP Peer Event Frame Transmitted Seconds Register 47:32 */
@@ -245,6 +249,8 @@
 #define MACB_TZQ_OFFSET		12 /* Transmit zero quantum pause frame */
 #define MACB_TZQ_SIZE		1
 #define MACB_SRTSM_OFFSET	15 /* Store Receive Timestamp to Memory */
+#define MACB_PTPUNI_OFFSET	20 /* PTP Unicast packet enable */
+#define MACB_PTPUNI_SIZE	1
 #define MACB_OSSMODE_OFFSET	24 /* Enable One Step Synchro Mode */
 #define MACB_OSSMODE_SIZE	1
 #define MACB_MIIONRGMII_OFFSET	28 /* MII Usage on RGMII Interface */
@@ -342,6 +348,21 @@
 #define GEM_ADDR64_OFFSET	30 /* Address bus width - 64b or 32b */
 #define GEM_ADDR64_SIZE		1
 
+/* Bitfields in AMP */
+#define GEM_AR2R_MAX_PIPE_OFFSET	0  /* Maximum number of outstanding AXI read requests */
+#define GEM_AR2R_MAX_PIPE_SIZE		8
+#define GEM_AW2W_MAX_PIPE_OFFSET	8  /* Maximum number of outstanding AXI write requests */
+#define GEM_AW2W_MAX_PIPE_SIZE		8
+#define GEM_AW2B_FILL_OFFSET		16 /* Select wether the max AW2W transactions operates between: */
+#define GEM_AW2B_FILL_AW2W		0  /*   0: the AW to W AXI channel */
+#define GEM_AW2B_FILL_AW2B		1  /*   1: AW to B channel */
+#define GEM_AW2B_FILL_SIZE              1
+
+/* Bitfields in INTMOD */
+#define GEM_RX_MODERATION_OFFSET	0  /* RX interrupt moderation */
+#define GEM_RX_MODERATION_SIZE		8
+#define GEM_TX_MODERATION_OFFSET	16 /* TX interrupt moderation */
+#define GEM_TX_MODERATION_SIZE		8
 
 /* Bitfields in NSR */
 #define MACB_NSR_LINK_OFFSET	0 /* pcs_link_state */
@@ -717,14 +738,15 @@
 #define MACB_CAPS_BD_RD_PREFETCH		0x00000080
 #define MACB_CAPS_NEEDS_RSTONUBR		0x00000100
 #define MACB_CAPS_MIIONRGMII			0x00000200
+#define MACB_CAPS_NEED_TSUCLK			0x00000400
+#define MACB_CAPS_PCS				0x01000000
+#define MACB_CAPS_HIGH_SPEED			0x02000000
 #define MACB_CAPS_CLK_HW_CHG			0x04000000
 #define MACB_CAPS_MACB_IS_EMAC			0x08000000
 #define MACB_CAPS_FIFO_MODE			0x10000000
 #define MACB_CAPS_GIGABIT_MODE_AVAILABLE	0x20000000
 #define MACB_CAPS_SG_DISABLED			0x40000000
 #define MACB_CAPS_MACB_IS_GEM			0x80000000
-#define MACB_CAPS_PCS				0x01000000
-#define MACB_CAPS_HIGH_SPEED			0x02000000
 
 /* LSO settings */
 #define MACB_LSO_UFO_ENABLE			0x01
@@ -793,6 +815,7 @@
 	})
 
 #define MACB_READ_NSR(bp)	macb_readl(bp, NSR)
+#define MACB_READ_TSR(bp)	macb_readl(bp, TSR)
 
 /* struct macb_dma_desc - Hardware DMA descriptor
  * @addr: DMA address of data buffer
@@ -1204,11 +1227,16 @@ struct macb_queue {
 	unsigned int		RBQP;
 	unsigned int		RBQPH;
 
+	/* Lock to protect tx_head and tx_tail */
+	spinlock_t		tx_ptr_lock;
 	unsigned int		tx_head, tx_tail;
 	struct macb_dma_desc	*tx_ring;
 	struct macb_tx_skb	*tx_skb;
 	dma_addr_t		tx_ring_dma;
 	struct work_struct	tx_error_task;
+	bool			txubr_pending;
+	bool			tx_pending;
+	struct napi_struct	napi_tx;
 
 	dma_addr_t		rx_ring_dma;
 	dma_addr_t		rx_buffers_dma;
@@ -1217,7 +1245,7 @@ struct macb_queue {
 	struct macb_dma_desc	*rx_ring;
 	struct sk_buff		**rx_skbuff;
 	void			*rx_buffers;
-	struct napi_struct	napi;
+	struct napi_struct	napi_rx;
 	struct queue_stats stats;
 
 #ifdef CONFIG_MACB_USE_HWSTAMP
@@ -1277,8 +1305,14 @@ struct macb {
 
 	u32			caps;
 	unsigned int		dma_burst_length;
+	u8			aw2w_max_pipe;
+	u8			ar2r_max_pipe;
+	bool			use_aw2b_fill;
 
 	phy_interface_t		phy_interface;
+
+	struct gpio_desc	*phy_reset_gpio;
+	int			phy_reset_ms;
 
 	/* AT91RM9200 transmit queue (1 on wire + 1 queued) */
 	struct macb_tx_skb	rm9200_txq[2];

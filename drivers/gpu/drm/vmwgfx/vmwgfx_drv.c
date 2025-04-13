@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0 OR MIT
 /**************************************************************************
  *
- * Copyright 2009-2016 VMware, Inc., Palo Alto, CA., USA
+ * Copyright 2009-2022 VMware, Inc., Palo Alto, CA., USA
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the
@@ -25,10 +25,13 @@
  *
  **************************************************************************/
 
-#include <linux/dma-mapping.h>
-#include <linux/module.h>
-#include <linux/pci.h>
-#include <linux/cc_platform.h>
+
+#include "vmwgfx_drv.h"
+
+#include "vmwgfx_devcaps.h"
+#include "vmwgfx_mksstat.h"
+#include "vmwgfx_binding.h"
+#include "ttm_object.h"
 
 #include <drm/drm_aperture.h>
 #include <drm/drm_drv.h>
@@ -41,11 +44,11 @@
 #include <drm/ttm/ttm_placement.h>
 #include <generated/utsrelease.h>
 
-#include "ttm_object.h"
-#include "vmwgfx_binding.h"
-#include "vmwgfx_devcaps.h"
-#include "vmwgfx_drv.h"
-#include "vmwgfx_mksstat.h"
+#include <linux/cc_platform.h>
+#include <linux/dma-mapping.h>
+#include <linux/module.h>
+#include <linux/pci.h>
+#include <linux/version.h>
 
 #define VMWGFX_DRIVER_DESC "Linux drm driver for VMware graphics devices"
 
@@ -806,6 +809,43 @@ static int vmw_detect_version(struct vmw_private *dev)
 	return 0;
 }
 
+static void vmw_write_driver_id(struct vmw_private *dev)
+{
+	if ((dev->capabilities2 & SVGA_CAP2_DX2) != 0) {
+		vmw_write(dev,  SVGA_REG_GUEST_DRIVER_ID,
+			  SVGA_REG_GUEST_DRIVER_ID_LINUX);
+
+		vmw_write(dev, SVGA_REG_GUEST_DRIVER_VERSION1,
+			  LINUX_VERSION_MAJOR << 24 |
+			  LINUX_VERSION_PATCHLEVEL << 16 |
+			  LINUX_VERSION_SUBLEVEL);
+		vmw_write(dev, SVGA_REG_GUEST_DRIVER_VERSION2,
+			  VMWGFX_DRIVER_MAJOR << 24 |
+			  VMWGFX_DRIVER_MINOR << 16 |
+			  VMWGFX_DRIVER_PATCHLEVEL);
+		vmw_write(dev, SVGA_REG_GUEST_DRIVER_VERSION3, 0);
+
+		vmw_write(dev, SVGA_REG_GUEST_DRIVER_ID,
+			  SVGA_REG_GUEST_DRIVER_ID_SUBMIT);
+	}
+}
+
+static void vmw_sw_context_init(struct vmw_private *dev_priv)
+{
+	struct vmw_sw_context *sw_context = &dev_priv->ctx;
+
+	hash_init(sw_context->res_ht);
+}
+
+static void vmw_sw_context_fini(struct vmw_private *dev_priv)
+{
+	struct vmw_sw_context *sw_context = &dev_priv->ctx;
+
+	vfree(sw_context->cmd_bounce);
+	if (sw_context->staged_bindings)
+		vmw_binding_state_free(sw_context->staged_bindings);
+}
+
 static int vmw_driver_load(struct vmw_private *dev_priv, u32 pci_id)
 {
 	int ret;
@@ -814,6 +854,8 @@ static int vmw_driver_load(struct vmw_private *dev_priv, u32 pci_id)
 	struct pci_dev *pdev = to_pci_dev(dev_priv->drm.dev);
 
 	dev_priv->drm.dev_private = dev_priv;
+
+	vmw_sw_context_init(dev_priv);
 
 	mutex_init(&dev_priv->cmdbuf_mutex);
 	mutex_init(&dev_priv->binding_mutex);
@@ -848,11 +890,15 @@ static int vmw_driver_load(struct vmw_private *dev_priv, u32 pci_id)
 
 
 	dev_priv->capabilities = vmw_read(dev_priv, SVGA_REG_CAPABILITIES);
-
+	vmw_print_bitmap(&dev_priv->drm, "Capabilities",
+			 dev_priv->capabilities,
+			 cap1_names, ARRAY_SIZE(cap1_names));
 	if (dev_priv->capabilities & SVGA_CAP_CAP2_REGISTER) {
 		dev_priv->capabilities2 = vmw_read(dev_priv, SVGA_REG_CAP2);
+		vmw_print_bitmap(&dev_priv->drm, "Capabilities2",
+				 dev_priv->capabilities2,
+				 cap2_names, ARRAY_SIZE(cap2_names));
 	}
-
 
 	ret = vmw_dma_select_mode(dev_priv);
 	if (unlikely(ret != 0)) {
@@ -939,14 +985,6 @@ static int vmw_driver_load(struct vmw_private *dev_priv, u32 pci_id)
 		 "MOB limits: max mob size = %u kB, max mob pages = %u\n",
 		 dev_priv->max_mob_size / 1024, dev_priv->max_mob_pages);
 
-	vmw_print_bitmap(&dev_priv->drm, "Capabilities",
-			 dev_priv->capabilities,
-			 cap1_names, ARRAY_SIZE(cap1_names));
-	if (dev_priv->capabilities & SVGA_CAP_CAP2_REGISTER)
-		vmw_print_bitmap(&dev_priv->drm, "Capabilities2",
-				 dev_priv->capabilities2,
-				 cap2_names, ARRAY_SIZE(cap2_names));
-
 	ret = vmw_dma_masks(dev_priv);
 	if (unlikely(ret != 0))
 		goto out_err0;
@@ -974,7 +1012,7 @@ static int vmw_driver_load(struct vmw_private *dev_priv, u32 pci_id)
 		goto out_err0;
 	}
 
-	dev_priv->tdev = ttm_object_device_init(12, &vmw_prime_dmabuf_ops);
+	dev_priv->tdev = ttm_object_device_init(&vmw_prime_dmabuf_ops);
 
 	if (unlikely(dev_priv->tdev == NULL)) {
 		drm_err(&dev_priv->drm,
@@ -984,7 +1022,7 @@ static int vmw_driver_load(struct vmw_private *dev_priv, u32 pci_id)
 	}
 
 	if (dev_priv->capabilities & SVGA_CAP_IRQMASK) {
-		ret = vmw_irq_install(&dev_priv->drm, pdev->irq);
+		ret = vmw_irq_install(dev_priv);
 		if (ret != 0) {
 			drm_err(&dev_priv->drm,
 				"Failed installing irq: %d\n", ret);
@@ -1095,6 +1133,7 @@ static int vmw_driver_load(struct vmw_private *dev_priv, u32 pci_id)
 	vmw_host_printf("vmwgfx: Module Version: %d.%d.%d (kernel: %s)",
 			VMWGFX_DRIVER_MAJOR, VMWGFX_DRIVER_MINOR,
 			VMWGFX_DRIVER_PATCHLEVEL, UTS_RELEASE);
+	vmw_write_driver_id(dev_priv);
 
 	if (dev_priv->enable_fb) {
 		vmw_fifo_resource_inc(dev_priv);
@@ -1147,9 +1186,7 @@ static void vmw_driver_unload(struct drm_device *dev)
 
 	unregister_pm_notifier(&dev_priv->pm_nb);
 
-	if (dev_priv->ctx.res_ht_initialized)
-		vmwgfx_ht_remove(&dev_priv->ctx.res_ht);
-	vfree(dev_priv->ctx.cmd_bounce);
+	vmw_sw_context_fini(dev_priv);
 	if (dev_priv->enable_fb) {
 		vmw_fb_off(dev_priv);
 		vmw_fb_close(dev_priv);
@@ -1177,8 +1214,6 @@ static void vmw_driver_unload(struct drm_device *dev)
 		vmw_irq_uninstall(&dev_priv->drm);
 
 	ttm_object_device_release(&dev_priv->tdev);
-	if (dev_priv->ctx.staged_bindings)
-		vmw_binding_state_free(dev_priv->ctx.staged_bindings);
 
 	for (i = vmw_res_context; i < vmw_res_max; ++i)
 		idr_destroy(&dev_priv->res_idr[i]);
@@ -1207,7 +1242,7 @@ static int vmw_driver_open(struct drm_device *dev, struct drm_file *file_priv)
 	if (unlikely(!vmw_fp))
 		return ret;
 
-	vmw_fp->tfile = ttm_object_file_init(dev_priv->tdev, 10);
+	vmw_fp->tfile = ttm_object_file_init(dev_priv->tdev);
 	if (unlikely(vmw_fp->tfile == NULL))
 		goto out_no_tfile;
 
@@ -1385,16 +1420,21 @@ static void vmw_remove(struct pci_dev *pdev)
 	vmw_driver_unload(dev);
 }
 
-static unsigned long
-vmw_get_unmapped_area(struct file *file, unsigned long uaddr,
-		      unsigned long len, unsigned long pgoff,
-		      unsigned long flags)
+static void vmw_debugfs_resource_managers_init(struct vmw_private *vmw)
 {
-	struct drm_file *file_priv = file->private_data;
-	struct vmw_private *dev_priv = vmw_priv(file_priv->minor->dev);
+	struct drm_minor *minor = vmw->drm.primary;
+	struct dentry *root = minor->debugfs_root;
 
-	return drm_get_unmapped_area(file, uaddr, len, pgoff, flags,
-				     dev_priv->drm.vma_offset_manager);
+	ttm_resource_manager_create_debugfs(ttm_manager_type(&vmw->bdev, TTM_PL_SYSTEM),
+					    root, "system_ttm");
+	ttm_resource_manager_create_debugfs(ttm_manager_type(&vmw->bdev, TTM_PL_VRAM),
+					    root, "vram_ttm");
+	ttm_resource_manager_create_debugfs(ttm_manager_type(&vmw->bdev, VMW_PL_GMR),
+					    root, "gmr_ttm");
+	ttm_resource_manager_create_debugfs(ttm_manager_type(&vmw->bdev, VMW_PL_MOB),
+					    root, "mob_ttm");
+	ttm_resource_manager_create_debugfs(ttm_manager_type(&vmw->bdev, VMW_PL_SYSTEM),
+					    root, "system_mob_ttm");
 }
 
 static int vmwgfx_pm_notifier(struct notifier_block *nb, unsigned long val,
@@ -1563,7 +1603,6 @@ static const struct file_operations vmwgfx_driver_fops = {
 	.compat_ioctl = vmw_compat_ioctl,
 #endif
 	.llseek = noop_llseek,
-	.get_unmapped_area = vmw_get_unmapped_area,
 };
 
 static const struct drm_driver driver = {
@@ -1632,6 +1671,7 @@ static int vmw_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 		goto out_unload;
 
 	vmw_debugfs_gem_init(vmw);
+	vmw_debugfs_resource_managers_init(vmw);
 
 	return 0;
 out_unload:

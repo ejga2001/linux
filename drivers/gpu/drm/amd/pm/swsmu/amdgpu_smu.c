@@ -24,6 +24,7 @@
 
 #include <linux/firmware.h>
 #include <linux/pci.h>
+#include <linux/reboot.h>
 
 #include "amdgpu.h"
 #include "amdgpu_smu.h"
@@ -37,7 +38,10 @@
 #include "aldebaran_ppt.h"
 #include "yellow_carp_ppt.h"
 #include "cyan_skillfish_ppt.h"
+#include "smu_v13_0_0_ppt.h"
+#include "smu_v13_0_4_ppt.h"
 #include "smu_v13_0_5_ppt.h"
+#include "smu_v13_0_7_ppt.h"
 #include "amd_pcie.h"
 
 /*
@@ -63,6 +67,7 @@ static int smu_set_fan_control_mode(void *handle, u32 value);
 static int smu_set_power_limit(void *handle, uint32_t limit);
 static int smu_set_fan_speed_rpm(void *handle, uint32_t speed);
 static int smu_set_gfx_cgpg(struct smu_context *smu, bool enabled);
+static int smu_set_mp1_state(void *handle, enum pp_mp1_state mp1_state);
 
 static int smu_sys_get_pp_feature_mask(void *handle,
 				       char *buf)
@@ -84,6 +89,30 @@ static int smu_sys_set_pp_feature_mask(void *handle,
 		return -EOPNOTSUPP;
 
 	return smu_set_pp_feature_mask(smu, new_mask);
+}
+
+int smu_set_residency_gfxoff(struct smu_context *smu, bool value)
+{
+	if (!smu->ppt_funcs->set_gfx_off_residency)
+		return -EINVAL;
+
+	return smu_set_gfx_off_residency(smu, value);
+}
+
+int smu_get_residency_gfxoff(struct smu_context *smu, u32 *value)
+{
+	if (!smu->ppt_funcs->get_gfx_off_residency)
+		return -EINVAL;
+
+	return smu_get_gfx_off_residency(smu, value);
+}
+
+int smu_get_entrycount_gfxoff(struct smu_context *smu, u64 *value)
+{
+	if (!smu->ppt_funcs->get_gfx_off_entrycount)
+		return -EINVAL;
+
+	return smu_get_gfx_off_entrycount(smu, value);
 }
 
 int smu_get_status_gfxoff(struct smu_context *smu, uint32_t *value)
@@ -131,6 +160,19 @@ int smu_get_dpm_freq_range(struct smu_context *smu,
 	return ret;
 }
 
+int smu_set_gfx_power_up_by_imu(struct smu_context *smu)
+{
+	int ret = 0;
+	struct amdgpu_device *adev = smu->adev;
+
+	if (smu->ppt_funcs->set_gfx_power_up_by_imu) {
+		ret = smu->ppt_funcs->set_gfx_power_up_by_imu(smu);
+		if (ret)
+			dev_err(adev->dev, "Failed to enable gfx imu!\n");
+	}
+	return ret;
+}
+
 static u32 smu_get_mclk(void *handle, bool low)
 {
 	struct smu_context *smu = handle;
@@ -157,6 +199,19 @@ static u32 smu_get_sclk(void *handle, bool low)
 	if (ret)
 		return 0;
 	return clk_freq * 100;
+}
+
+static int smu_set_gfx_imu_enable(struct smu_context *smu)
+{
+	struct amdgpu_device *adev = smu->adev;
+
+	if (adev->firmware.load_type != AMDGPU_FW_LOAD_PSP)
+		return 0;
+
+	if (amdgpu_in_reset(smu->adev) || adev->in_s0ix)
+		return 0;
+
+	return smu_set_gfx_power_up_by_imu(smu);
 }
 
 static int smu_dpm_set_vcn_enable(struct smu_context *smu,
@@ -488,8 +543,20 @@ static int smu_sys_set_pp_table(void *handle,
 static int smu_get_driver_allowed_feature_mask(struct smu_context *smu)
 {
 	struct smu_feature *feature = &smu->smu_feature;
-	int ret = 0;
 	uint32_t allowed_feature_mask[SMU_FEATURE_MAX/32];
+	int ret = 0;
+
+	/*
+	 * With SCPM enabled, the allowed featuremasks setting(via
+	 * PPSMC_MSG_SetAllowedFeaturesMaskLow/High) is not permitted.
+	 * That means there is no way to let PMFW knows the settings below.
+	 * Thus, we just assume all the features are allowed under
+	 * such scenario.
+	 */
+	if (smu->adev->scpm_enabled) {
+		bitmap_fill(feature->allowed, SMU_FEATURE_MAX);
+		return 0;
+	}
 
 	bitmap_zero(feature->allowed, SMU_FEATURE_MAX);
 
@@ -536,6 +603,10 @@ static int smu_set_funcs(struct amdgpu_device *adev)
 	case IP_VERSION(13, 0, 8):
 		yellow_carp_set_ppt_funcs(smu);
 		break;
+	case IP_VERSION(13, 0, 4):
+	case IP_VERSION(13, 0, 11):
+		smu_v13_0_4_set_ppt_funcs(smu);
+		break;
 	case IP_VERSION(13, 0, 5):
 		smu_v13_0_5_set_ppt_funcs(smu);
 		break;
@@ -552,6 +623,13 @@ static int smu_set_funcs(struct amdgpu_device *adev)
 		aldebaran_set_ppt_funcs(smu);
 		/* Enable pp_od_clk_voltage node */
 		smu->od_enabled = true;
+		break;
+	case IP_VERSION(13, 0, 0):
+	case IP_VERSION(13, 0, 10):
+		smu_v13_0_0_set_ppt_funcs(smu);
+		break;
+	case IP_VERSION(13, 0, 7):
+		smu_v13_0_7_set_ppt_funcs(smu);
 		break;
 	default:
 		return -EINVAL;
@@ -644,6 +722,24 @@ static int smu_late_init(void *handle)
 	if (ret) {
 		dev_err(adev->dev, "Failed to post smu init!\n");
 		return ret;
+	}
+
+	/*
+	 * Explicitly notify PMFW the power mode the system in. Since
+	 * the PMFW may boot the ASIC with a different mode.
+	 * For those supporting ACDC switch via gpio, PMFW will
+	 * handle the switch automatically. Driver involvement
+	 * is unnecessary.
+	 */
+	if (!smu->dc_controlled_by_gpio) {
+		ret = smu_set_power_source(smu,
+					   adev->pm.ac_power ? SMU_POWER_SOURCE_AC :
+					   SMU_POWER_SOURCE_DC);
+		if (ret) {
+			dev_err(adev->dev, "Failed to switch to %s mode!\n",
+				adev->pm.ac_power ? "AC" : "DC");
+			return ret;
+		}
 	}
 
 	if ((adev->ip_versions[MP1_HWIP][0] == IP_VERSION(13, 0, 1)) ||
@@ -966,6 +1062,34 @@ static void smu_interrupt_work_fn(struct work_struct *work)
 		smu->ppt_funcs->interrupt_work(smu);
 }
 
+static void smu_swctf_delayed_work_handler(struct work_struct *work)
+{
+	struct smu_context *smu =
+		container_of(work, struct smu_context, swctf_delayed_work.work);
+	struct smu_temperature_range *range =
+				&smu->thermal_range;
+	struct amdgpu_device *adev = smu->adev;
+	uint32_t hotspot_tmp, size;
+
+	/*
+	 * If the hotspot temperature is confirmed as below SW CTF setting point
+	 * after the delay enforced, nothing will be done.
+	 * Otherwise, a graceful shutdown will be performed to prevent further damage.
+	 */
+	if (range->software_shutdown_temp &&
+	    smu->ppt_funcs->read_sensor &&
+	    !smu->ppt_funcs->read_sensor(smu,
+					 AMDGPU_PP_SENSOR_HOTSPOT_TEMP,
+					 &hotspot_tmp,
+					 &size) &&
+	    hotspot_tmp / 1000 < range->software_shutdown_temp)
+		return;
+
+	dev_emerg(adev->dev, "ERROR: GPU over temperature range(SW CTF) detected!\n");
+	dev_emerg(adev->dev, "ERROR: System is going to shutdown due to GPU SW CTF!\n");
+	orderly_poweroff(true);
+}
+
 static int smu_sw_init(void *handle)
 {
 	struct amdgpu_device *adev = (struct amdgpu_device *)handle;
@@ -1014,9 +1138,25 @@ static int smu_sw_init(void *handle)
 		return ret;
 	}
 
+	INIT_DELAYED_WORK(&smu->swctf_delayed_work,
+			  smu_swctf_delayed_work_handler);
+
 	ret = smu_smc_table_sw_init(smu);
 	if (ret) {
 		dev_err(adev->dev, "Failed to sw init smc table!\n");
+		return ret;
+	}
+
+	/* get boot_values from vbios to set revision, gfxclk, and etc. */
+	ret = smu_get_vbios_bootup_values(smu);
+	if (ret) {
+		dev_err(adev->dev, "Failed to get VBIOS boot clock values!\n");
+		return ret;
+	}
+
+	ret = smu_init_pptable_microcode(smu);
+	if (ret) {
+		dev_err(adev->dev, "Failed to setup pptable firmware!\n");
 		return ret;
 	}
 
@@ -1085,22 +1225,21 @@ static int smu_smc_hw_setup(struct smu_context *smu)
 	uint64_t features_supported;
 	int ret = 0;
 
-	if (adev->in_suspend && smu_is_dpm_running(smu)) {
-		dev_info(adev->dev, "dpm has been enabled\n");
-		/* this is needed specifically */
-		switch (adev->ip_versions[MP1_HWIP][0]) {
-		case IP_VERSION(11, 0, 7):
-		case IP_VERSION(11, 0, 11):
-		case IP_VERSION(11, 5, 0):
-		case IP_VERSION(11, 0, 12):
+	switch (adev->ip_versions[MP1_HWIP][0]) {
+	case IP_VERSION(11, 0, 7):
+	case IP_VERSION(11, 0, 11):
+	case IP_VERSION(11, 5, 0):
+	case IP_VERSION(11, 0, 12):
+		if (adev->in_suspend && smu_is_dpm_running(smu)) {
+			dev_info(adev->dev, "dpm has been enabled\n");
 			ret = smu_system_features_control(smu, true);
 			if (ret)
 				dev_err(adev->dev, "Failed system features control!\n");
-			break;
-		default:
-			break;
+			return ret;
 		}
-		return ret;
+		break;
+	default:
+		break;
 	}
 
 	ret = smu_init_display_count(smu, 0);
@@ -1134,15 +1273,28 @@ static int smu_smc_hw_setup(struct smu_context *smu)
 		return ret;
 	}
 
-	/* smu_dump_pptable(smu); */
-	/*
-	 * Copy pptable bo in the vram to smc with SMU MSGs such as
-	 * SetDriverDramAddr and TransferTableDram2Smu.
-	 */
-	ret = smu_write_pptable(smu);
+	ret = smu_setup_pptable(smu);
 	if (ret) {
-		dev_err(adev->dev, "Failed to transfer pptable to SMC!\n");
+		dev_err(adev->dev, "Failed to setup pptable!\n");
 		return ret;
+	}
+
+	/* smu_dump_pptable(smu); */
+
+	/*
+	 * With SCPM enabled, PSP is responsible for the PPTable transferring
+	 * (to SMU). Driver involvement is not needed and permitted.
+	 */
+	if (!adev->scpm_enabled) {
+		/*
+		 * Copy pptable bo in the vram to smc with SMU MSGs such as
+		 * SetDriverDramAddr and TransferTableDram2Smu.
+		 */
+		ret = smu_write_pptable(smu);
+		if (ret) {
+			dev_err(adev->dev, "Failed to transfer pptable to SMC!\n");
+			return ret;
+		}
 	}
 
 	/* issue Run*Btc msg */
@@ -1150,10 +1302,16 @@ static int smu_smc_hw_setup(struct smu_context *smu)
 	if (ret)
 		return ret;
 
-	ret = smu_feature_set_allowed_mask(smu);
-	if (ret) {
-		dev_err(adev->dev, "Failed to set driver allowed features mask!\n");
-		return ret;
+	/*
+	 * With SCPM enabled, these actions(and relevant messages) are
+	 * not needed and permitted.
+	 */
+	if (!adev->scpm_enabled) {
+		ret = smu_feature_set_allowed_mask(smu);
+		if (ret) {
+			dev_err(adev->dev, "Failed to set driver allowed features mask!\n");
+			return ret;
+		}
 	}
 
 	ret = smu_system_features_control(smu, true);
@@ -1173,6 +1331,17 @@ static int smu_smc_hw_setup(struct smu_context *smu)
 
 	if (!smu_is_dpm_running(smu))
 		dev_info(adev->dev, "dpm has been disabled\n");
+
+	/*
+	 * Set initialized values (get from vbios) to dpm tables context such as
+	 * gfxclk, memclk, dcefclk, and etc. And enable the DPM feature for each
+	 * type of clks.
+	 */
+	ret = smu_set_default_dpm_table(smu);
+	if (ret) {
+		dev_err(adev->dev, "Failed to setup default dpm clock tables!\n");
+		return ret;
+	}
 
 	if (adev->pm.pcie_gen_mask & CAIL_PCIE_LINK_SPEED_SUPPORT_GEN4)
 		pcie_gen = 3;
@@ -1213,19 +1382,8 @@ static int smu_smc_hw_setup(struct smu_context *smu)
 
 	ret = smu_enable_thermal_alert(smu);
 	if (ret) {
-		dev_err(adev->dev, "Failed to enable thermal alert!\n");
-		return ret;
-	}
-
-	/*
-	 * Set initialized values (get from vbios) to dpm tables context such as
-	 * gfxclk, memclk, dcefclk, and etc. And enable the DPM feature for each
-	 * type of clks.
-	 */
-	ret = smu_set_default_dpm_table(smu);
-	if (ret) {
-		dev_err(adev->dev, "Failed to setup default dpm clock tables!\n");
-		return ret;
+	  dev_err(adev->dev, "Failed to enable thermal alert!\n");
+	  return ret;
 	}
 
 	ret = smu_notify_display_change(smu);
@@ -1296,6 +1454,9 @@ static int smu_hw_init(void *handle)
 	}
 
 	if (smu->is_apu) {
+		ret = smu_set_gfx_imu_enable(smu);
+		if (ret)
+			return ret;
 		smu_dpm_set_vcn_enable(smu, true);
 		smu_dpm_set_jpeg_enable(smu, true);
 		smu_set_gfx_cgpg(smu, true);
@@ -1303,19 +1464,6 @@ static int smu_hw_init(void *handle)
 
 	if (!smu->pm_enabled)
 		return 0;
-
-	/* get boot_values from vbios to set revision, gfxclk, and etc. */
-	ret = smu_get_vbios_bootup_values(smu);
-	if (ret) {
-		dev_err(adev->dev, "Failed to get VBIOS boot clock values!\n");
-		return ret;
-	}
-
-	ret = smu_setup_pptable(smu);
-	if (ret) {
-		dev_err(adev->dev, "Failed to setup pptable!\n");
-		return ret;
-	}
 
 	ret = smu_get_driver_allowed_feature_mask(smu);
 	if (ret)
@@ -1357,6 +1505,18 @@ static int smu_disable_dpms(struct smu_context *smu)
 		 ((adev->in_runpm || adev->in_s4) && amdgpu_asic_supports_baco(adev)));
 
 	/*
+	 * For SMU 13.0.0 and 13.0.7, PMFW will handle the DPM features(disablement or others)
+	 * properly on suspend/reset/unload. Driver involvement may cause some unexpected issues.
+	 */
+	switch (adev->ip_versions[MP1_HWIP][0]) {
+	case IP_VERSION(13, 0, 0):
+	case IP_VERSION(13, 0, 7):
+		return 0;
+	default:
+		break;
+	}
+
+	/*
 	 * For custom pptable uploading, skip the DPM features
 	 * disable process on Navi1x ASICs.
 	 *   - As the gfx related features are under control of
@@ -1393,6 +1553,21 @@ static int smu_disable_dpms(struct smu_context *smu)
 		case IP_VERSION(11, 0, 0):
 		case IP_VERSION(11, 0, 5):
 		case IP_VERSION(11, 0, 9):
+		case IP_VERSION(13, 0, 7):
+			return 0;
+		default:
+			break;
+		}
+	}
+
+	/*
+	 * For SMU 13.0.4/11, PMFW will handle the features disablement properly
+	 * for gpu reset and S0i3 cases. Driver involvement is unnecessary.
+	 */
+	if (amdgpu_in_reset(adev) || adev->in_s0ix) {
+		switch (adev->ip_versions[MP1_HWIP][0]) {
+		case IP_VERSION(13, 0, 4):
+		case IP_VERSION(13, 0, 11):
 			return 0;
 		default:
 			break;
@@ -1409,9 +1584,12 @@ static int smu_disable_dpms(struct smu_context *smu)
 		if (ret)
 			dev_err(adev->dev, "Failed to disable smu features except BACO.\n");
 	} else {
-		ret = smu_system_features_control(smu, false);
-		if (ret)
-			dev_err(adev->dev, "Failed to disable smu features.\n");
+		/* DisableAllSmuFeatures message is not permitted with SCPM enabled */
+		if (!adev->scpm_enabled) {
+			ret = smu_system_features_control(smu, false);
+			if (ret)
+				dev_err(adev->dev, "Failed to disable smu features.\n");
+		}
 	}
 
 	if (adev->ip_versions[GC_HWIP][0] >= IP_VERSION(9, 4, 2) &&
@@ -1434,6 +1612,8 @@ static int smu_smc_hw_cleanup(struct smu_context *smu)
 		dev_err(adev->dev, "Fail to disable thermal alert!\n");
 		return ret;
 	}
+
+	cancel_delayed_work_sync(&smu->swctf_delayed_work);
 
 	ret = smu_disable_dpms(smu);
 	if (ret) {
@@ -1499,6 +1679,7 @@ static int smu_suspend(void *handle)
 	struct amdgpu_device *adev = (struct amdgpu_device *)handle;
 	struct smu_context *smu = adev->powerplay.pp_handle;
 	int ret;
+	uint64_t count;
 
 	if (amdgpu_sriov_vf(adev)&& !amdgpu_sriov_is_pp_one_vf(adev))
 		return 0;
@@ -1515,6 +1696,14 @@ static int smu_suspend(void *handle)
 	smu->watermarks_bitmap &= ~(WATERMARKS_LOADED);
 
 	smu_set_gfx_cgpg(smu, false);
+
+	/*
+	 * pwfw resets entrycount when device is suspended, so we save the
+	 * last value to be used when we resume to keep it consistent
+	 */
+	ret = smu_get_entrycount_gfxoff(smu, &count);
+	if (!ret)
+		adev->gfx.gfx_off_entrycount = count;
 
 	return 0;
 }
@@ -1544,6 +1733,10 @@ static int smu_resume(void *handle)
 		dev_err(adev->dev, "Failed to setup smc hw!\n");
 		return ret;
 	}
+
+	ret = smu_set_gfx_imu_enable(smu);
+	if (ret)
+		return ret;
 
 	smu_set_gfx_cgpg(smu, true);
 
@@ -2361,6 +2554,14 @@ static int smu_read_sensor(void *handle,
 		*((uint32_t *)data) = pstate_table->uclk_pstate.standard * 100;
 		*size = 4;
 		break;
+	case AMDGPU_PP_SENSOR_PEAK_PSTATE_SCLK:
+		*((uint32_t *)data) = pstate_table->gfxclk_pstate.peak * 100;
+		*size = 4;
+		break;
+	case AMDGPU_PP_SENSOR_PEAK_PSTATE_MCLK:
+		*((uint32_t *)data) = pstate_table->uclk_pstate.peak * 100;
+		*size = 4;
+		break;
 	case AMDGPU_PP_SENSOR_ENABLED_SMC_FEATURES_MASK:
 		ret = smu_feature_get_enabled_mask(smu, (uint64_t *)data);
 		*size = 8;
@@ -2419,7 +2620,6 @@ static int smu_set_power_profile_mode(void *handle,
 
 	return smu_bump_power_profile_mode(smu, param, param_size);
 }
-
 
 static int smu_get_fan_control_mode(void *handle, u32 *fan_mode)
 {
@@ -3025,7 +3225,7 @@ void amdgpu_smu_stb_debug_fs_init(struct amdgpu_device *adev)
 
 	struct smu_context *smu = adev->powerplay.pp_handle;
 
-	if (!smu->stb_context.stb_buf_size)
+	if (!smu || (!smu->stb_context.stb_buf_size))
 		return;
 
 	debugfs_create_file_size("amdgpu_smu_stb_dump",

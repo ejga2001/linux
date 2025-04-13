@@ -1210,11 +1210,10 @@ found:
  * Returns 0 on success, otherwise a negative error code.
  */
 int snd_soc_runtime_set_dai_fmt(struct snd_soc_pcm_runtime *rtd,
-	unsigned int dai_fmt)
+				unsigned int dai_fmt)
 {
 	struct snd_soc_dai *cpu_dai;
 	struct snd_soc_dai *codec_dai;
-	unsigned int inv_dai_fmt;
 	unsigned int i;
 	int ret;
 
@@ -1235,31 +1234,11 @@ int snd_soc_runtime_set_dai_fmt(struct snd_soc_pcm_runtime *rtd,
 			return ret;
 	}
 
-	/*
-	 * Flip the polarity for the "CPU" end of a CODEC<->CODEC link
-	 */
-	inv_dai_fmt = dai_fmt & ~SND_SOC_DAIFMT_MASTER_MASK;
-	switch (dai_fmt & SND_SOC_DAIFMT_MASTER_MASK) {
-	case SND_SOC_DAIFMT_CBM_CFM:
-		inv_dai_fmt |= SND_SOC_DAIFMT_CBS_CFS;
-		break;
-	case SND_SOC_DAIFMT_CBM_CFS:
-		inv_dai_fmt |= SND_SOC_DAIFMT_CBS_CFM;
-		break;
-	case SND_SOC_DAIFMT_CBS_CFM:
-		inv_dai_fmt |= SND_SOC_DAIFMT_CBM_CFS;
-		break;
-	case SND_SOC_DAIFMT_CBS_CFS:
-		inv_dai_fmt |= SND_SOC_DAIFMT_CBM_CFM;
-		break;
-	}
+	/* Flip the polarity for the "CPU" end of link */
+	dai_fmt = snd_soc_daifmt_clock_provider_flipped(dai_fmt);
+
 	for_each_rtd_cpu_dais(rtd, i, cpu_dai) {
-		unsigned int fmt = dai_fmt;
-
-		if (snd_soc_component_is_codec(cpu_dai->component))
-			fmt = inv_dai_fmt;
-
-		ret = snd_soc_dai_set_fmt(cpu_dai, fmt);
+		ret = snd_soc_dai_set_fmt(cpu_dai, dai_fmt);
 		if (ret != 0 && ret != -ENOTSUPP)
 			return ret;
 	}
@@ -1275,9 +1254,6 @@ static int soc_init_pcm_runtime(struct snd_soc_card *card,
 	struct snd_soc_dai *cpu_dai = asoc_rtd_to_cpu(rtd, 0);
 	struct snd_soc_component *component;
 	int ret, num, i;
-
-	/* set default power off timeout */
-	rtd->pmdown_time = pmdown_time;
 
 	/* do machine specific initialization */
 	ret = snd_soc_link_init(rtd);
@@ -2518,7 +2494,7 @@ static int snd_soc_register_dais(struct snd_soc_component *component,
 
 	for (i = 0; i < count; i++) {
 		dai = snd_soc_register_dai(component, dai_drv + i, count == 1 &&
-					   !snd_soc_component_is_codec(component));
+					   component->driver->legacy_dai_naming);
 		if (dai == NULL) {
 			ret = -ENOMEM;
 			goto err;
@@ -3056,7 +3032,7 @@ int snd_soc_of_parse_aux_devs(struct snd_soc_card *card, const char *propname)
 }
 EXPORT_SYMBOL_GPL(snd_soc_of_parse_aux_devs);
 
-unsigned int snd_soc_daifmt_clock_provider_fliped(unsigned int dai_fmt)
+unsigned int snd_soc_daifmt_clock_provider_flipped(unsigned int dai_fmt)
 {
 	unsigned int inv_dai_fmt = dai_fmt & ~SND_SOC_DAIFMT_CLOCK_PROVIDER_MASK;
 
@@ -3077,7 +3053,7 @@ unsigned int snd_soc_daifmt_clock_provider_fliped(unsigned int dai_fmt)
 
 	return inv_dai_fmt;
 }
-EXPORT_SYMBOL_GPL(snd_soc_daifmt_clock_provider_fliped);
+EXPORT_SYMBOL_GPL(snd_soc_daifmt_clock_provider_flipped);
 
 unsigned int snd_soc_daifmt_clock_provider_from_bitmap(unsigned int bit_frame)
 {

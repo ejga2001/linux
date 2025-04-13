@@ -11,12 +11,15 @@
 };
 
 &cam1_reg {
-	gpio = <&gpio 2 GPIO_ACTIVE_HIGH>;
+	gpio = <&gpio 3 GPIO_ACTIVE_HIGH>;
 	status = "disabled";
 };
 
 cam0_reg: &cam0_regulator {
-	gpio = <&gpio 30 GPIO_ACTIVE_HIGH>;
+	gpio = <&gpio 31 GPIO_ACTIVE_HIGH>;
+};
+
+i2c_csi_dsi0: &i2c0 {
 };
 
 &uart0 {
@@ -161,7 +164,7 @@ cam0_reg: &cam0_regulator {
 	pinctrl-0 = <&i2s_pins>;
 };
 
-&audio {
+&vchiq {
 	pinctrl-names = "default";
 	pinctrl-0 = <&audio_pins>;
 };

@@ -201,6 +201,13 @@ struct fb_pixmap {
 };
 
 #ifdef CONFIG_FB_DEFERRED_IO
+struct fb_deferred_io_pageref {
+	struct page *page;
+	unsigned long offset;
+	/* private */
+	struct list_head list;
+};
+
 struct fb_deferred_io {
 	/* delay between mkwrite and deferred handler */
 	unsigned long delay;

@@ -3,10 +3,16 @@
 
 &leds {
 	act_led: led-act {
-		label = "led0";
+		default-state = "off";
 		linux,default-trigger = "mmc0";
 		gpios = <&gpio 47 0>;
 	};
+};
+
+i2c_arm: &i2c1 {
+};
+
+i2c_vc: &i2c0 {
 };
 
 / {

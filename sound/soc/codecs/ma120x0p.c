@@ -1179,7 +1179,6 @@ static const struct snd_soc_component_driver ma120x0p_component_driver = {
 	.num_controls = ARRAY_SIZE(ma120x0p_snd_controls),
 	.use_pmdown_time	= 1,
 	.endianness		= 1,
-	.non_legacy_dai_naming	= 1,
 };
 
 //I2C Driver

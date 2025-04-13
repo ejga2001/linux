@@ -1,15 +1,5 @@
-/*
- * Copyright (C) 2015-2017 Broadcom
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License as
- * published by the Free Software Foundation version 2.
- *
- * This program is distributed "as is" WITHOUT ANY WARRANTY of any
- * kind, whether express or implied; without even the implied warranty
- * of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- */
+// SPDX-License-Identifier: GPL-2.0-only
+// Copyright (C) 2015-2017 Broadcom
 
 #include <linux/bitops.h>
 #include <linux/gpio/driver.h>
@@ -92,9 +82,9 @@ brcmstb_gpio_get_active_irqs(struct brcmstb_gpio_bank *bank)
 	unsigned long status;
 	unsigned long flags;
 
-	spin_lock_irqsave(&bank->gc.bgpio_lock, flags);
+	raw_spin_lock_irqsave(&bank->gc.bgpio_lock, flags);
 	status = __brcmstb_gpio_get_active_irqs(bank);
-	spin_unlock_irqrestore(&bank->gc.bgpio_lock, flags);
+	raw_spin_unlock_irqrestore(&bank->gc.bgpio_lock, flags);
 
 	return status;
 }
@@ -114,14 +104,14 @@ static void brcmstb_gpio_set_imask(struct brcmstb_gpio_bank *bank,
 	u32 imask;
 	unsigned long flags;
 
-	spin_lock_irqsave(&gc->bgpio_lock, flags);
+	raw_spin_lock_irqsave(&gc->bgpio_lock, flags);
 	imask = gc->read_reg(priv->reg_base + GIO_MASK(bank->id));
 	if (enable)
 		imask |= mask;
 	else
 		imask &= ~mask;
 	gc->write_reg(priv->reg_base + GIO_MASK(bank->id), imask);
-	spin_unlock_irqrestore(&gc->bgpio_lock, flags);
+	raw_spin_unlock_irqrestore(&gc->bgpio_lock, flags);
 }
 
 static int brcmstb_gpio_to_irq(struct gpio_chip *gc, unsigned offset)
@@ -204,7 +194,7 @@ static int brcmstb_gpio_irq_set_type(struct irq_data *d, unsigned int type)
 		return -EINVAL;
 	}
 
-	spin_lock_irqsave(&bank->gc.bgpio_lock, flags);
+	raw_spin_lock_irqsave(&bank->gc.bgpio_lock, flags);
 
 	iedge_config = bank->gc.read_reg(priv->reg_base +
 			GIO_EC(bank->id)) & ~mask;
@@ -220,7 +210,7 @@ static int brcmstb_gpio_irq_set_type(struct irq_data *d, unsigned int type)
 	bank->gc.write_reg(priv->reg_base + GIO_LEVEL(bank->id),
 			ilevel | level);
 
-	spin_unlock_irqrestore(&bank->gc.bgpio_lock, flags);
+	raw_spin_unlock_irqrestore(&bank->gc.bgpio_lock, flags);
 	return 0;
 }
 
@@ -385,12 +375,7 @@ static int brcmstb_gpio_remove(struct platform_device *pdev)
 {
 	struct brcmstb_gpio_priv *priv = platform_get_drvdata(pdev);
 	struct brcmstb_gpio_bank *bank;
-	int offset, ret = 0, virq;
-
-	if (!priv) {
-		dev_err(&pdev->dev, "called %s without drvdata!\n", __func__);
-		return -EFAULT;
-	}
+	int offset, virq;
 
 	if (priv->parent_irq > 0)
 		irq_set_chained_handler_and_data(priv->parent_irq, NULL, NULL);
@@ -411,7 +396,7 @@ static int brcmstb_gpio_remove(struct platform_device *pdev)
 	list_for_each_entry(bank, &priv->bank_list, node)
 		gpiochip_remove(&bank->gc);
 
-	return ret;
+	return 0;
 }
 
 static int brcmstb_gpio_of_xlate(struct gpio_chip *gc,
@@ -655,6 +640,8 @@ static int brcmstb_gpio_probe(struct platform_device *pdev)
 #if defined(CONFIG_MIPS) && defined(__BIG_ENDIAN)
 	flags = BGPIOF_BIG_ENDIAN_BYTE_ORDER;
 #endif
+	if (of_property_read_bool(np, "brcm,gpio-direct"))
+	    flags |= BGPIOF_REG_DIRECT;
 
 	of_property_for_each_u32(np, "brcm,gpio-bank-widths", prop, p,
 			bank_width) {
@@ -704,7 +691,9 @@ static int brcmstb_gpio_probe(struct platform_device *pdev)
 		}
 
 		gc->owner = THIS_MODULE;
-		gc->label = devm_kasprintf(dev, GFP_KERNEL, "%pOF", np);
+		gc->label = devm_kasprintf(dev, GFP_KERNEL, "gpio-brcmstb@%zx",
+					   (size_t)res->start +
+					   GIO_BANK_OFF(bank->id, 0));
 		if (!gc->label) {
 			err = -ENOMEM;
 			goto fail;
@@ -713,7 +702,7 @@ static int brcmstb_gpio_probe(struct platform_device *pdev)
 		gc->of_gpio_n_cells = 2;
 		gc->of_xlate = brcmstb_gpio_of_xlate;
 		/* not all ngpio lines are valid, will use bank width later */
-		gc->ngpio = MAX_GPIO_PER_BANK;
+		gc->ngpio = bank_width;
 		gc->offset = bank->id * MAX_GPIO_PER_BANK;
 		if (priv->parent_irq > 0)
 			gc->to_irq = brcmstb_gpio_to_irq;
@@ -722,8 +711,10 @@ static int brcmstb_gpio_probe(struct platform_device *pdev)
 		 * Mask all interrupts by default, since wakeup interrupts may
 		 * be retained from S5 cold boot
 		 */
-		need_wakeup_event |= !!__brcmstb_gpio_get_active_irqs(bank);
-		gc->write_reg(reg_base + GIO_MASK(bank->id), 0);
+		if (priv->parent_irq > 0) {
+			need_wakeup_event |= !!__brcmstb_gpio_get_active_irqs(bank);
+			gc->write_reg(reg_base + GIO_MASK(bank->id), 0);
+		}
 
 		err = gpiochip_add_data(gc, bank);
 		if (err) {

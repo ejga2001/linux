@@ -53,14 +53,16 @@ extern const struct kfd2kgd_calls arcturus_kfd2kgd;
 extern const struct kfd2kgd_calls aldebaran_kfd2kgd;
 extern const struct kfd2kgd_calls gfx_v10_kfd2kgd;
 extern const struct kfd2kgd_calls gfx_v10_3_kfd2kgd;
+extern const struct kfd2kgd_calls gfx_v11_kfd2kgd;
 
 static int kfd_gtt_sa_init(struct kfd_dev *kfd, unsigned int buf_size,
 				unsigned int chunk_size);
 static void kfd_gtt_sa_fini(struct kfd_dev *kfd);
 
+static int kfd_resume_iommu(struct kfd_dev *kfd);
 static int kfd_resume(struct kfd_dev *kfd);
 
-static void kfd_device_info_set_sdma_queue_num(struct kfd_dev *kfd)
+static void kfd_device_info_set_sdma_info(struct kfd_dev *kfd)
 {
 	uint32_t sdma_version = kfd->adev->ip_versions[SDMA0_HWIP][0];
 
@@ -72,6 +74,8 @@ static void kfd_device_info_set_sdma_queue_num(struct kfd_dev *kfd)
 	case IP_VERSION(4, 1, 2):/* RENOIR */
 	case IP_VERSION(5, 2, 1):/* VANGOGH */
 	case IP_VERSION(5, 2, 3):/* YELLOW_CARP */
+	case IP_VERSION(5, 2, 6):/* GC 10.3.6 */
+	case IP_VERSION(5, 2, 7):/* GC 10.3.7 */
 		kfd->device_info.num_sdma_queues_per_engine = 2;
 		break;
 	case IP_VERSION(4, 2, 0):/* VEGA20 */
@@ -85,6 +89,10 @@ static void kfd_device_info_set_sdma_queue_num(struct kfd_dev *kfd)
 	case IP_VERSION(5, 2, 2):/* NAVY_FLOUNDER */
 	case IP_VERSION(5, 2, 4):/* DIMGREY_CAVEFISH */
 	case IP_VERSION(5, 2, 5):/* BEIGE_GOBY */
+	case IP_VERSION(6, 0, 0):
+	case IP_VERSION(6, 0, 1):
+	case IP_VERSION(6, 0, 2):
+	case IP_VERSION(6, 0, 3):
 		kfd->device_info.num_sdma_queues_per_engine = 8;
 		break;
 	default:
@@ -92,6 +100,25 @@ static void kfd_device_info_set_sdma_queue_num(struct kfd_dev *kfd)
 			"Default sdma queue per engine(8) is set due to mismatch of sdma ip block(SDMA_HWIP:0x%x).\n",
 			sdma_version);
 		kfd->device_info.num_sdma_queues_per_engine = 8;
+	}
+
+	switch (sdma_version) {
+	case IP_VERSION(6, 0, 0):
+	case IP_VERSION(6, 0, 2):
+	case IP_VERSION(6, 0, 3):
+		/* Reserve 1 for paging and 1 for gfx */
+		kfd->device_info.num_reserved_sdma_queues_per_engine = 2;
+		/* BIT(0)=engine-0 queue-0; BIT(1)=engine-1 queue-0; BIT(2)=engine-0 queue-1; ... */
+		kfd->device_info.reserved_sdma_queues_bitmap = 0xFULL;
+		break;
+	case IP_VERSION(6, 0, 1):
+		/* Reserve 1 for paging and 1 for gfx */
+		kfd->device_info.num_reserved_sdma_queues_per_engine = 2;
+		/* BIT(0)=engine-0 queue-0; BIT(1)=engine-0 queue-1; ... */
+		kfd->device_info.reserved_sdma_queues_bitmap = 0x3ULL;
+		break;
+	default:
+		break;
 	}
 }
 
@@ -110,6 +137,8 @@ static void kfd_device_info_set_event_interrupt_class(struct kfd_dev *kfd)
 	case IP_VERSION(9, 4, 2): /* ALDEBARAN */
 	case IP_VERSION(10, 3, 1): /* VANGOGH */
 	case IP_VERSION(10, 3, 3): /* YELLOW_CARP */
+	case IP_VERSION(10, 3, 6): /* GC 10.3.6 */
+	case IP_VERSION(10, 3, 7): /* GC 10.3.7 */
 	case IP_VERSION(10, 1, 3): /* CYAN_SKILLFISH */
 	case IP_VERSION(10, 1, 4):
 	case IP_VERSION(10, 1, 10): /* NAVI10 */
@@ -120,6 +149,13 @@ static void kfd_device_info_set_event_interrupt_class(struct kfd_dev *kfd)
 	case IP_VERSION(10, 3, 4): /* DIMGREY_CAVEFISH */
 	case IP_VERSION(10, 3, 5): /* BEIGE_GOBY */
 		kfd->device_info.event_interrupt_class = &event_interrupt_class_v9;
+		break;
+	case IP_VERSION(11, 0, 0):
+	case IP_VERSION(11, 0, 1):
+	case IP_VERSION(11, 0, 2):
+	case IP_VERSION(11, 0, 3):
+	case IP_VERSION(11, 0, 4):
+		kfd->device_info.event_interrupt_class = &event_interrupt_class_v11;
 		break;
 	default:
 		dev_warn(kfd_device, "v9 event interrupt handler is set due to "
@@ -145,7 +181,7 @@ static void kfd_device_info_init(struct kfd_dev *kfd,
 		kfd->device_info.ih_ring_entry_size = 8 * sizeof(uint32_t);
 		kfd->device_info.supports_cwsr = true;
 
-		kfd_device_info_set_sdma_queue_num(kfd);
+		kfd_device_info_set_sdma_info(kfd);
 
 		kfd_device_info_set_event_interrupt_class(kfd);
 
@@ -350,6 +386,30 @@ struct kfd_dev *kgd2kfd_probe(struct amdgpu_device *adev, bool vf)
 			if (!vf)
 				f2g = &gfx_v10_3_kfd2kgd;
 			break;
+		case IP_VERSION(10, 3, 6):
+		case IP_VERSION(10, 3, 7):
+			gfx_target_version = 100306;
+			if (!vf)
+				f2g = &gfx_v10_3_kfd2kgd;
+			break;
+		case IP_VERSION(11, 0, 0):
+			gfx_target_version = 110000;
+			f2g = &gfx_v11_kfd2kgd;
+			break;
+		case IP_VERSION(11, 0, 1):
+		case IP_VERSION(11, 0, 4):
+			gfx_target_version = 110003;
+			f2g = &gfx_v11_kfd2kgd;
+			break;
+		case IP_VERSION(11, 0, 2):
+			gfx_target_version = 110002;
+			f2g = &gfx_v11_kfd2kgd;
+			break;
+		case IP_VERSION(11, 0, 3):
+			/* Note: Compiler version is 11.0.1 while HW version is 11.0.3 */
+			gfx_target_version = 110001;
+			f2g = &gfx_v11_kfd2kgd;
+			break;
 		default:
 			break;
 		}
@@ -411,10 +471,14 @@ static void kfd_cwsr_init(struct kfd_dev *kfd)
 			BUILD_BUG_ON(sizeof(cwsr_trap_nv1x_hex) > PAGE_SIZE);
 			kfd->cwsr_isa = cwsr_trap_nv1x_hex;
 			kfd->cwsr_isa_size = sizeof(cwsr_trap_nv1x_hex);
-		} else {
+		} else if (KFD_GC_VERSION(kfd) < IP_VERSION(11, 0, 0)) {
 			BUILD_BUG_ON(sizeof(cwsr_trap_gfx10_hex) > PAGE_SIZE);
 			kfd->cwsr_isa = cwsr_trap_gfx10_hex;
 			kfd->cwsr_isa_size = sizeof(cwsr_trap_gfx10_hex);
+		} else {
+			BUILD_BUG_ON(sizeof(cwsr_trap_gfx11_hex) > PAGE_SIZE);
+			kfd->cwsr_isa = cwsr_trap_gfx11_hex;
+			kfd->cwsr_isa_size = sizeof(cwsr_trap_gfx11_hex);
 		}
 
 		kfd->cwsr_enabled = true;
@@ -573,7 +637,7 @@ bool kgd2kfd_device_init(struct kfd_dev *kfd,
 
 	svm_migrate_init(kfd->adev);
 
-	if (kgd2kfd_resume_iommu(kfd))
+	if (kfd_resume_iommu(kfd))
 		goto device_iommu_error;
 
 	if (kfd_resume(kfd))
@@ -722,6 +786,14 @@ int kgd2kfd_resume(struct kfd_dev *kfd, bool run_pm)
 
 int kgd2kfd_resume_iommu(struct kfd_dev *kfd)
 {
+	if (!kfd->init_complete)
+		return 0;
+
+	return kfd_resume_iommu(kfd);
+}
+
+static int kfd_resume_iommu(struct kfd_dev *kfd)
+{
 	int err = 0;
 
 	err = kfd_iommu_resume(kfd);
@@ -787,7 +859,7 @@ void kgd2kfd_interrupt(struct kfd_dev *kfd, const void *ih_ring_entry)
 	spin_unlock_irqrestore(&kfd->interrupt_lock, flags);
 }
 
-int kgd2kfd_quiesce_mm(struct mm_struct *mm)
+int kgd2kfd_quiesce_mm(struct mm_struct *mm, uint32_t trigger)
 {
 	struct kfd_process *p;
 	int r;
@@ -801,7 +873,7 @@ int kgd2kfd_quiesce_mm(struct mm_struct *mm)
 		return -ESRCH;
 
 	WARN(debug_evictions, "Evicting pid %d", p->lead_thread->pid);
-	r = kfd_process_evict_queues(p);
+	r = kfd_process_evict_queues(p, trigger);
 
 	kfd_unref_process(p);
 	return r;
@@ -879,8 +951,6 @@ out:
 static int kfd_gtt_sa_init(struct kfd_dev *kfd, unsigned int buf_size,
 				unsigned int chunk_size)
 {
-	unsigned int num_of_longs;
-
 	if (WARN_ON(buf_size < chunk_size))
 		return -EINVAL;
 	if (WARN_ON(buf_size == 0))
@@ -891,11 +961,8 @@ static int kfd_gtt_sa_init(struct kfd_dev *kfd, unsigned int buf_size,
 	kfd->gtt_sa_chunk_size = chunk_size;
 	kfd->gtt_sa_num_of_chunks = buf_size / chunk_size;
 
-	num_of_longs = (kfd->gtt_sa_num_of_chunks + BITS_PER_LONG - 1) /
-		BITS_PER_LONG;
-
-	kfd->gtt_sa_bitmap = kcalloc(num_of_longs, sizeof(long), GFP_KERNEL);
-
+	kfd->gtt_sa_bitmap = bitmap_zalloc(kfd->gtt_sa_num_of_chunks,
+					   GFP_KERNEL);
 	if (!kfd->gtt_sa_bitmap)
 		return -ENOMEM;
 
@@ -905,13 +972,12 @@ static int kfd_gtt_sa_init(struct kfd_dev *kfd, unsigned int buf_size,
 	mutex_init(&kfd->gtt_sa_lock);
 
 	return 0;
-
 }
 
 static void kfd_gtt_sa_fini(struct kfd_dev *kfd)
 {
 	mutex_destroy(&kfd->gtt_sa_lock);
-	kfree(kfd->gtt_sa_bitmap);
+	bitmap_free(kfd->gtt_sa_bitmap);
 }
 
 static inline uint64_t kfd_gtt_sa_calc_gpu_addr(uint64_t start_addr,
@@ -979,7 +1045,7 @@ kfd_gtt_restart_search:
 	/* If we need only one chunk, mark it as allocated and get out */
 	if (size <= kfd->gtt_sa_chunk_size) {
 		pr_debug("Single bit\n");
-		set_bit(found, kfd->gtt_sa_bitmap);
+		__set_bit(found, kfd->gtt_sa_bitmap);
 		goto kfd_gtt_out;
 	}
 
@@ -1017,10 +1083,8 @@ kfd_gtt_restart_search:
 		(*mem_obj)->range_start, (*mem_obj)->range_end);
 
 	/* Mark the chunks as allocated */
-	for (found = (*mem_obj)->range_start;
-		found <= (*mem_obj)->range_end;
-		found++)
-		set_bit(found, kfd->gtt_sa_bitmap);
+	bitmap_set(kfd->gtt_sa_bitmap, (*mem_obj)->range_start,
+		   (*mem_obj)->range_end - (*mem_obj)->range_start + 1);
 
 kfd_gtt_out:
 	mutex_unlock(&kfd->gtt_sa_lock);
@@ -1035,8 +1099,6 @@ kfd_gtt_no_free_chunk:
 
 int kfd_gtt_sa_free(struct kfd_dev *kfd, struct kfd_mem_obj *mem_obj)
 {
-	unsigned int bit;
-
 	/* Act like kfree when trying to free a NULL object */
 	if (!mem_obj)
 		return 0;
@@ -1047,10 +1109,8 @@ int kfd_gtt_sa_free(struct kfd_dev *kfd, struct kfd_mem_obj *mem_obj)
 	mutex_lock(&kfd->gtt_sa_lock);
 
 	/* Mark the chunks as free */
-	for (bit = mem_obj->range_start;
-		bit <= mem_obj->range_end;
-		bit++)
-		clear_bit(bit, kfd->gtt_sa_bitmap);
+	bitmap_clear(kfd->gtt_sa_bitmap, mem_obj->range_start,
+		     mem_obj->range_end - mem_obj->range_start + 1);
 
 	mutex_unlock(&kfd->gtt_sa_lock);
 
