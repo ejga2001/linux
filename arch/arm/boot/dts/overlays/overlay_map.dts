@@ -48,6 +48,14 @@
 		bcm2712;
 	};
 
+	hifiberry-adc8x {
+		bcm2712;
+	};
+
+	hifiberry-dac8x {
+		bcm2712;
+	};
+
 	highperi {
 		bcm2711;
 	};
@@ -112,6 +120,16 @@
 	i2s-gpio28-31 {
 		bcm2835;
 		bcm2711;
+	};
+
+	imx500 {
+		bcm2835;
+		bcm2711;
+		bcm2712 = "imx500-pi5";
+	};
+
+	imx500-pi5 {
+		bcm2712;
 	};
 
 	lirc-rpi {
@@ -185,6 +203,15 @@
 
 	pcie-32bit-dma {
 		bcm2711;
+		bcm2712 = "pcie-32bit-dma-pi5";
+	};
+
+	pcie-32bit-dma-pi5 {
+		bcm2712;
+	};
+
+	pcie-compat-pi5 {
+		bcm2712;
 	};
 
 	pi3-act-led {
@@ -203,6 +230,16 @@
 		renamed = "miniuart-bt";
 	};
 
+	pisound {
+		bcm2835;
+		bcm2711;
+		bcm2712 = "pisound-pi5";
+	};
+
+	pisound-pi5 {
+		bcm2712;
+	};
+
 	pwm1 {
 		bcm2711;
 	};
@@ -210,10 +247,12 @@
 	ramoops {
 		bcm2835;
 		bcm2711 = "ramoops-pi4";
+		bcm2712 = "ramoops-pi4";
 	};
 
 	ramoops-pi4 {
 		bcm2711;
+		bcm2712;
 	};
 
 	rpi-cirrus-wm5102 {
@@ -244,10 +283,15 @@
 	sdio {
 		bcm2835;
 		bcm2711;
+		bcm2712 = "sdio-pi5";
 	};
 
 	sdio-1bit {
 		deprecated = "use sdio,bus_width=1,gpios_22_25";
+	};
+
+	sdio-pi5 {
+		bcm2712;
 	};
 
 	sdtweak {
@@ -446,4 +490,25 @@
 	vl805 {
 		bcm2711;
 	};
+
+	w1-gpio {
+		bcm2835;
+		bcm2711;
+		bcm2712 = "w1-gpio-pi5";
+	};
+
+	w1-gpio-pi5 {
+		bcm2712;
+	};
+
+	w1-gpio-pullup {
+		bcm2835;
+		bcm2711;
+		bcm2712 = "w1-gpio-pullup-pi5";
+	};
+
+	w1-gpio-pullup-pi5 {
+		bcm2712;
+	};
+
 };

@@ -34,6 +34,7 @@ dtbo-$(CONFIG_ARCH_BCM2835) += \
 	audiosense-pi.dtbo \
 	audremap.dtbo \
 	balena-fin.dtbo \
+	bcm2712d0.dtbo \
 	camera-mux-2port.dtbo \
 	camera-mux-4port.dtbo \
 	cap1106.dtbo \
@@ -81,13 +82,20 @@ dtbo-$(CONFIG_ARCH_BCM2835) += \
 	gpio-no-irq.dtbo \
 	gpio-poweroff.dtbo \
 	gpio-shutdown.dtbo \
+	hd44780-i2c-lcd.dtbo \
 	hd44780-lcd.dtbo \
 	hdmi-backlight-hwhack-gpio.dtbo \
+	hifiberry-adc.dtbo \
+	hifiberry-adc8x.dtbo \
 	hifiberry-amp.dtbo \
 	hifiberry-amp100.dtbo \
 	hifiberry-amp3.dtbo \
+	hifiberry-amp4pro.dtbo \
 	hifiberry-dac.dtbo \
+	hifiberry-dac8x.dtbo \
 	hifiberry-dacplus.dtbo \
+	hifiberry-dacplus-pro.dtbo \
+	hifiberry-dacplus-std.dtbo \
 	hifiberry-dacplusadc.dtbo \
 	hifiberry-dacplusadcpro.dtbo \
 	hifiberry-dacplusdsp.dtbo \
@@ -119,6 +127,7 @@ dtbo-$(CONFIG_ARCH_BCM2835) += \
 	i2c6.dtbo \
 	i2s-dac.dtbo \
 	i2s-gpio28-31.dtbo \
+	i2s-master-dac.dtbo \
 	ilitek251x.dtbo \
 	imx219.dtbo \
 	imx258.dtbo \
@@ -128,8 +137,12 @@ dtbo-$(CONFIG_ARCH_BCM2835) += \
 	imx378.dtbo \
 	imx462.dtbo \
 	imx477.dtbo \
+	imx500.dtbo \
+	imx500-pi5.dtbo \
 	imx519.dtbo \
 	imx708.dtbo \
+	interludeaudio-analog.dtbo \
+	interludeaudio-digital.dtbo \
 	iqaudio-codec.dtbo \
 	iqaudio-dac.dtbo \
 	iqaudio-dacplus.dtbo \
@@ -171,16 +184,18 @@ dtbo-$(CONFIG_ARCH_BCM2835) += \
 	mipi-dbi-spi.dtbo \
 	mlx90640.dtbo \
 	mmc.dtbo \
-	mpu6050.dtbo \
 	mz61581.dtbo \
 	ov2311.dtbo \
 	ov5647.dtbo \
+	ov64a40.dtbo \
 	ov7251.dtbo \
 	ov9281.dtbo \
 	papirus.dtbo \
 	pca953x.dtbo \
 	pcf857x.dtbo \
 	pcie-32bit-dma.dtbo \
+	pcie-32bit-dma-pi5.dtbo \
+	pciex1-compat-pi5.dtbo \
 	pibell.dtbo \
 	pifacedigital.dtbo \
 	pifi-40.dtbo \
@@ -188,9 +203,12 @@ dtbo-$(CONFIG_ARCH_BCM2835) += \
 	pifi-dac-zero.dtbo \
 	pifi-mini-210.dtbo \
 	piglow.dtbo \
+	pineboards-hat-ai.dtbo \
+	pineboards-hatdrive-poe-plus.dtbo \
 	piscreen.dtbo \
 	piscreen2r.dtbo \
 	pisound.dtbo \
+	pisound-pi5.dtbo \
 	pitft22.dtbo \
 	pitft28-capacitive.dtbo \
 	pitft28-resistive.dtbo \
@@ -220,11 +238,13 @@ dtbo-$(CONFIG_ARCH_BCM2835) += \
 	rra-digidac1-wm8741-audio.dtbo \
 	sainsmart18.dtbo \
 	sc16is750-i2c.dtbo \
+	sc16is750-spi0.dtbo \
 	sc16is752-i2c.dtbo \
 	sc16is752-spi0.dtbo \
 	sc16is752-spi1.dtbo \
 	sdhost.dtbo \
 	sdio.dtbo \
+	sdio-pi5.dtbo \
 	seeed-can-fd-hat-v1.dtbo \
 	seeed-can-fd-hat-v2.dtbo \
 	sh1106-spi.dtbo \
@@ -262,6 +282,8 @@ dtbo-$(CONFIG_ARCH_BCM2835) += \
 	ssd1306-spi.dtbo \
 	ssd1331-spi.dtbo \
 	ssd1351-spi.dtbo \
+	sunfounder-pipower3.dtbo \
+	sunfounder-pironman5.dtbo \
 	superaudioboard.dtbo \
 	sx150x.dtbo \
 	tc358743.dtbo \
@@ -292,8 +314,12 @@ dtbo-$(CONFIG_ARCH_BCM2835) += \
 	vc4-kms-dpi-hyperpixel4sq.dtbo \
 	vc4-kms-dpi-panel.dtbo \
 	vc4-kms-dsi-7inch.dtbo \
+	vc4-kms-dsi-generic.dtbo \
+	vc4-kms-dsi-ili9881-5inch.dtbo \
+	vc4-kms-dsi-ili9881-7inch.dtbo \
 	vc4-kms-dsi-lt070me05000.dtbo \
 	vc4-kms-dsi-lt070me05000-v2.dtbo \
+	vc4-kms-dsi-waveshare-800x480.dtbo \
 	vc4-kms-dsi-waveshare-panel.dtbo \
 	vc4-kms-kippah-7inch.dtbo \
 	vc4-kms-v3d.dtbo \
@@ -303,7 +329,9 @@ dtbo-$(CONFIG_ARCH_BCM2835) += \
 	vga666.dtbo \
 	vl805.dtbo \
 	w1-gpio.dtbo \
+	w1-gpio-pi5.dtbo \
 	w1-gpio-pullup.dtbo \
+	w1-gpio-pullup-pi5.dtbo \
 	w5500.dtbo \
 	watterott-display.dtbo \
 	waveshare-can-fd-hat-mode-a.dtbo \

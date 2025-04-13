@@ -87,7 +87,7 @@
 				spi-max-frequency = <2000000>;
 				interrupts = <17 2>; /* high-to-low edge triggered */
 				interrupt-parent = <&gpio>;
-				pendown-gpio = <&gpio 17 0>;
+				pendown-gpio = <&gpio 17 GPIO_ACTIVE_LOW>;
 				ti,swap-xy;
 				ti,x-plate-ohms = /bits/ 16 <100>;
 				ti,pressure-max = /bits/ 16 <255>;
@@ -96,11 +96,15 @@
 	};
 	__overrides__ {
 		speed =		<&piscreen>,"spi-max-frequency:0";
-		rotate =	<&piscreen>,"rotate:0";
+		rotate =	<&piscreen>,"rotate:0",
+				<&piscreen>,"rotation:0";
 		fps =		<&piscreen>,"fps:0";
 		debug =		<&piscreen>,"debug:0";
 		xohms =		<&piscreen_ts>,"ti,x-plate-ohms;0";
 		drm =		<&piscreen>,"compatible=waveshare,rpi-lcd-35",
 				<&piscreen>,"reset-gpios:8=",<GPIO_ACTIVE_HIGH>;
+		invx =		<&piscreen_ts>,"touchscreen-inverted-x?";
+		invy =		<&piscreen_ts>,"touchscreen-inverted-y?";
+		swapxy =	<&piscreen_ts>,"touchscreen-swapped-x-y!";
 	};
 };
