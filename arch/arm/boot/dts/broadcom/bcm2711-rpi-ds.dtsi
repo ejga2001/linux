@@ -3,6 +3,8 @@
 
 / {
 	chosen: chosen {
+		bootargs = "coherent_pool=1M 8250.nr_uarts=1 snd_bcm2835.enable_headphones=0 numa_policy=interleave";
+		stdout-path = "serial0:115200n8";
 	};
 
 	__overrides__ {
@@ -33,10 +35,6 @@
 	arm-pmu {
 		compatible = "arm,cortex-a72-pmu", "arm,armv8-pmuv3", "arm,cortex-a7-pmu";
 
-	};
-
-	chosen {
-		stdout-path = "serial0:115200n8";
 	};
 
 	aliases {
