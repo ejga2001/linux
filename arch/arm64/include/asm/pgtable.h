@@ -1487,10 +1487,20 @@ static inline void set_pte(pte_t *ptep, pte_t pte)
 	__set_pte(ptep, pte_mknoncont(pte));
 }
 
+#ifdef CONFIG_PFTRACE
+#include <linux/tracepoint-defs.h>
+
+DECLARE_TRACEPOINT(fault);
+void do_trace_contpte_set(unsigned long cycles);
+#endif /* CONFIG_PFTRACE */
+
 #define set_ptes set_ptes
 static __always_inline void set_ptes(struct mm_struct *mm, unsigned long addr,
 				pte_t *ptep, pte_t pte, unsigned int nr)
 {
+#ifdef CONFIG_PFTRACE
+	unsigned long cycles = get_cycles();
+#endif /* CONFIG_PFTRACE */
 	pte = pte_mknoncont(pte);
 
 	if (likely(nr == 1)) {
@@ -1500,6 +1510,11 @@ static __always_inline void set_ptes(struct mm_struct *mm, unsigned long addr,
 	} else {
 		contpte_set_ptes(mm, addr, ptep, pte, nr);
 	}
+#ifdef CONFIG_PFTRACE
+	if (tracepoint_enabled(fault)) {
+		do_trace_contpte_set(get_cycles() - cycles);
+	}
+#endif /* CONFIG_PFTRACE */
 }
 
 static inline void pte_clear(struct mm_struct *mm,

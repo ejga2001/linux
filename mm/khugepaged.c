@@ -89,6 +89,10 @@ static unsigned int khugepaged_max_ptes_none __read_mostly;
 static unsigned int khugepaged_max_ptes_swap __read_mostly;
 static unsigned int khugepaged_max_ptes_shared __read_mostly;
 
+static bool khugepaged_hwk __read_mostly = false;
+static bool khugepaged_enable __read_mostly = true;
+bool kcompactd_enable __read_mostly = true;
+
 #define MM_SLOTS_HASH_BITS 10
 static DEFINE_READ_MOSTLY_HASHTABLE(mm_slots_hash, MM_SLOTS_HASH_BITS);
 
@@ -327,6 +331,81 @@ static ssize_t max_ptes_shared_store(struct kobject *kobj,
 static struct kobj_attribute khugepaged_max_ptes_shared_attr =
 	__ATTR_RW(max_ptes_shared);
 
+static ssize_t khugepaged_enable_show(struct kobject *kobj,
+				      struct kobj_attribute *attr, char *buf)
+{
+	return sysfs_emit(buf, "%u\n", khugepaged_enable);
+}
+static ssize_t khugepaged_enable_store(struct kobject *kobj,
+				       struct kobj_attribute *attr,
+				       const char *buf, size_t count)
+{
+	int err;
+	unsigned long enable;
+
+	err  = kstrtoul(buf, 10, &enable);
+	if (err)
+		return -EINVAL;
+
+	khugepaged_enable = !!enable;
+
+	return count;
+}
+static struct kobj_attribute khugepaged_enable_attr =
+	__ATTR(khugepaged_enable, 0644, khugepaged_enable_show,
+	       khugepaged_enable_store);
+
+static ssize_t kcompactd_enable_show(struct kobject *kobj,
+				      struct kobj_attribute *attr, char *buf)
+{
+	return sysfs_emit(buf, "%u\n", kcompactd_enable);
+}
+static ssize_t kcompactd_enable_store(struct kobject *kobj,
+				       struct kobj_attribute *attr,
+				       const char *buf, size_t count)
+{
+	int err;
+	unsigned long enable;
+
+	err  = kstrtoul(buf, 10, &enable);
+	if (err)
+		return -EINVAL;
+
+	kcompactd_enable = !!enable;
+
+	return count;
+}
+
+static ssize_t khugepaged_hwk_show(struct kobject *kobj,
+				      struct kobj_attribute *attr, char *buf)
+{
+	return sysfs_emit(buf, "%u\n", khugepaged_hwk);
+}
+
+static ssize_t khugepaged_hwk_store(struct kobject *kobj,
+				       struct kobj_attribute *attr,
+				       const char *buf, size_t count)
+{
+	int err;
+	unsigned long enable;
+
+	err  = kstrtoul(buf, 10, &enable);
+	if (err)
+		return -EINVAL;
+
+	khugepaged_hwk = !!enable;
+
+	return count;
+}
+
+static struct kobj_attribute khugepaged_hwk_attr =
+	__ATTR(khugepaged_hwk, 0644, khugepaged_hwk_show,
+	       khugepaged_hwk_store);
+
+static struct kobj_attribute kcompactd_enable_attr =
+	__ATTR(kcompactd_enable, 0644, kcompactd_enable_show,
+	       kcompactd_enable_store);
+
 static struct attribute *khugepaged_attr[] = {
 	&khugepaged_defrag_attr.attr,
 	&khugepaged_max_ptes_none_attr.attr,
@@ -337,6 +416,9 @@ static struct attribute *khugepaged_attr[] = {
 	&full_scans_attr.attr,
 	&scan_sleep_millisecs_attr.attr,
 	&alloc_sleep_millisecs_attr.attr,
+	&khugepaged_enable_attr.attr,
+	&kcompactd_enable_attr.attr,
+	&khugepaged_hwk_attr.attr,
 	NULL,
 };
 
@@ -454,8 +536,9 @@ void khugepaged_enter_vma(struct vm_area_struct *vma,
 	if (!test_bit(MMF_VM_HUGEPAGE, &vma->vm_mm->flags) &&
 	    hugepage_flags_enabled()) {
 		if (thp_vma_allowable_order(vma, vm_flags, false, false, true,
-					    PMD_ORDER))
+					    PMD_ORDER)) {
 			__khugepaged_enter(vma->vm_mm);
+		}
 	}
 }
 
@@ -2355,6 +2438,7 @@ static unsigned int khugepaged_scan_mm_slot(unsigned int pages, int *result,
 	spin_unlock(&khugepaged_mm_lock);
 
 	mm = slot->mm;
+
 	/*
 	 * Don't wait for semaphore (to avoid long wait times).  Just move to
 	 * the next mm on the list.
@@ -2425,12 +2509,18 @@ skip:
 					khugepaged_scan.address, &mmap_locked, cc);
 			}
 
-			if (*result == SCAN_SUCCEED)
+			if (*result == SCAN_SUCCEED) {
 				++khugepaged_pages_collapsed;
+				if (khugepaged_hwk) {
+					progress += HPAGE_PMD_NR;
+				}
+			}
 
 			/* move to next address */
 			khugepaged_scan.address += HPAGE_PMD_SIZE;
-			progress += HPAGE_PMD_NR;
+			if (!khugepaged_hwk) {
+				progress += HPAGE_PMD_NR;
+			}
 			if (!mmap_locked)
 				/*
 				 * We released mmap_lock so break loop.  Note
@@ -2565,7 +2655,9 @@ static int khugepaged(void *none)
 	set_user_nice(current, MAX_NICE);
 
 	while (!kthread_should_stop()) {
-		khugepaged_do_scan(&khugepaged_collapse_control);
+		if (khugepaged_enable) {
+			khugepaged_do_scan(&khugepaged_collapse_control);
+		}
 		khugepaged_wait_work();
 	}
 

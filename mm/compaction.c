@@ -3160,6 +3160,8 @@ void wakeup_kcompactd(pg_data_t *pgdat, int order, int highest_zoneidx)
 	wake_up_interruptible(&pgdat->kcompactd_wait);
 }
 
+extern bool kcompactd_enable;
+
 /*
  * The background compaction daemon, started as a kernel thread
  * from the init process.
@@ -3183,6 +3185,14 @@ static int kcompactd(void *p)
 
 	while (!kthread_should_stop()) {
 		unsigned long pflags;
+
+		if (!kcompactd_enable) {
+			pgdat->proactive_compact_trigger = false;
+			timeout = default_timeout;
+			wait_event_freezable_timeout(pgdat->kcompactd_wait,
+					kcompactd_enable, timeout);
+			continue;
+		}
 
 		/*
 		 * Avoid the unnecessary wakeup for proactive compaction

@@ -1241,6 +1241,13 @@ config LOCK_MM_AND_FIND_VMA
 config IOMMU_MM_DATA
 	bool
 
+config PFTRACE
+	bool "Fault latency tracing"
+	depends on TRACEPOINTS
+
+	help
+	  Enable page-fault latency tracepoints (for both vanilla and CA paths)
+
 source "mm/damon/Kconfig"
 
 endmenu

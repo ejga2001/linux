@@ -92,6 +92,13 @@
 #include "internal.h"
 #include "swap.h"
 
+#ifdef CONFIG_PFTRACE
+#include <linux/tracepoint-defs.h>
+
+DECLARE_TRACEPOINT(fault);
+void do_trace_fault(unsigned long cycles);
+#endif /* CONFIG_PFTRACE */
+
 #if defined(LAST_CPUPID_NOT_IN_PAGE_FLAGS) && !defined(CONFIG_COMPILE_TEST)
 #warning Unfortunate NUMA and NUMA Balancing config, growing page-frame for last_cpupid.
 #endif
@@ -5578,6 +5585,9 @@ vm_fault_t handle_mm_fault(struct vm_area_struct *vma, unsigned long address,
 	/* If the fault handler drops the mmap_lock, vma may be freed */
 	struct mm_struct *mm = vma->vm_mm;
 	vm_fault_t ret;
+#ifdef CONFIG_PFTRACE
+	unsigned long cycles = get_cycles();
+#endif /* CONFIG_PFTRACE */
 
 	__set_current_state(TASK_RUNNING);
 
@@ -5622,6 +5632,11 @@ vm_fault_t handle_mm_fault(struct vm_area_struct *vma, unsigned long address,
 out:
 	mm_account_fault(mm, regs, address, flags, ret);
 
+#ifdef CONFIG_PFTRACE
+		if (tracepoint_enabled(fault)) {
+			do_trace_fault(get_cycles() - cycles);
+		}
+#endif /* CONFIG_PFTRACE */
 	return ret;
 }
 EXPORT_SYMBOL_GPL(handle_mm_fault);
